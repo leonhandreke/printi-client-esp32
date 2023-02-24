@@ -90,8 +90,7 @@ void _client_event_callback(const usb_host_client_event_msg_t *event_msg, void *
 
 // Reference: esp-idf/examples/peripherals/usb/host/usb_host_lib/main/usb_host_lib_main.c
 
-class_driver_t* usbh_setup(usb_host_new_device_cb_t new_device_cb)
-{
+class_driver_t* usbh_setup(usb_host_new_device_cb_t new_device_cb) {
   class_driver_t *driver_obj = (class_driver_t *) malloc(sizeof(class_driver_t));
   // Initialize dev_addr because that's how we know we're not yet attached to a device;
   driver_obj->dev_addr = 0;
@@ -118,7 +117,7 @@ class_driver_t* usbh_setup(usb_host_new_device_cb_t new_device_cb)
   return driver_obj;
 }
 
-void usbh_task(void)
+void usbh_handle(class_driver_t *driver_obj)
 {
   uint32_t event_flags;
   static bool all_clients_gone = false;
@@ -140,8 +139,19 @@ void usbh_task(void)
     }
   }
 
-  err = usb_host_client_handle_events(Client_Handle, CLIENT_EVENT_TIMEOUT);
+  err = usb_host_client_handle_events(driver_obj->client_hdl, CLIENT_EVENT_TIMEOUT);
   if ((err != ESP_OK) && (err != ESP_ERR_TIMEOUT)) {
     ESP_LOGI("", "usb_host_client_handle_events: %x", err);
   }
+}
+
+void usbh_task(void *arg) {
+  usb_host_new_device_cb_t new_device_cb = (usb_host_new_device_cb_t) arg;
+  class_driver_t *driver_obj = usbh_setup(new_device_cb);
+
+  while (true) {
+    usbh_handle(driver_obj);
+  }
+
+  vTaskSuspend(NULL);
 }

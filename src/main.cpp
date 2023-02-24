@@ -22,22 +22,32 @@
  * SOFTWARE.
  */
 
+#define ARDUINO_USB_MODE 1
+#define ARDUINO_USB_CDC_ON_BOOT 0
+
 #include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+#include "ESC_POS_Printer/ESC_POS_Printer.h"
 
 #include "usbh.hpp"
+
+#include "Printer.hpp"
 
 extern const uint8_t logo_h58_start[] asm("_binary_resources_logo_h58_start");
 extern const uint8_t logo_h58_end[] asm("_binary_resources_logo_h58_end");
 
-const size_t PRINTER_OUT_BUFFERS = 300;
-usb_transfer_t* printer_in = NULL;
-usb_transfer_t* printer_out = NULL;
+String PRINTI_API_SERVER_BASE_URL = "https://api.printi.me";
 
-static void printer_transfer_cb(usb_transfer_t *transfer)
-{
-  ESP_LOGI("", "printer_transfer_cb context: %d", transfer->context);
-  ESP_LOGI("", "printer_transfer_cb status %d", transfer->status);
-}
+WiFiClientSecure wifiClient;
+HTTPClient http;
+
+Printer* printer = NULL;
+ESC_POS_Printer* esc_pos_printer = NULL;
 
 
 void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_device_handle_t dev_hdl)
@@ -50,7 +60,7 @@ void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_devi
 
   usb_intf_desc_t* printer_intf_desc = NULL;
 
-  cur_desc = NULL;
+  cur_desc = (const usb_standard_desc_t *) config_desc;
   cur_desc_offset = 0;
   while (printer_intf_desc == NULL) {
     cur_desc = usb_parse_next_descriptor_of_type(
@@ -66,43 +76,42 @@ void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_devi
     // USB Printer Class Specification 1.1
     if ((intf_desc->bInterfaceClass == USB_CLASS_PRINTER) && (intf_desc->bInterfaceSubClass == 1)) {
       printer_intf_desc = intf_desc;
+      ESP_LOGI("", "Found printer interface at: %x", intf_desc->bInterfaceNumber);
     }
   }
 
+  ESP_LOGI("", "Claiming interface: %x", printer_intf_desc->bInterfaceNumber);
   ESP_ERROR_CHECK(usb_host_interface_claim(client_hdl, dev_hdl,
                                            printer_intf_desc->bInterfaceNumber,
                                            printer_intf_desc->bAlternateSetting));
 
 
+  const usb_ep_desc_t *in_ep_desc;
+  const usb_ep_desc_t *out_ep_desc;
   // Find the printer outgoing endpoint
   for (int i = 0; i < printer_intf_desc->bNumEndpoints; i++) {
 
-  }
     // Strangely, usb_parse_endpoint_descriptor_by_index insists on giving back the offset of the endpoint descriptor
     int temp_offset = cur_desc_offset;
     const usb_ep_desc_t* ep_desc = usb_parse_endpoint_descriptor_by_index(printer_intf_desc,
                                                                           i,
                                                                           config_desc->wTotalLength,
                                                                           &temp_offset);
-  // Must be bulk transfer for printer
-  if ((ep_desc->bmAttributes & USB_BM_ATTRIBUTES_XFERTYPE_MASK) == USB_BM_ATTRIBUTES_XFER_BULK) {
+    // Must be bulk transfer for printer
+    if ((ep_desc->bmAttributes & USB_BM_ATTRIBUTES_XFERTYPE_MASK) == USB_BM_ATTRIBUTES_XFER_BULK) {
       //  Bits 7 Direction 0 = Out, 1 = In (Ignored for Control Endpoints)
       if (USB_EP_DESC_GET_EP_DIR(ep_desc) == 1) {
-        ESP_ERROR_CHECK(usb_host_transfer_alloc(ep_desc->wMaxPacketSize, 0, &printer_in));
-        printer_in->device_handle = dev_hdl;
-        printer_in->bEndpointAddress = ep_desc->bEndpointAddress;
-        printer_in->callback = printer_transfer_cb;
-        printer_in->context = NULL;
+        in_ep_desc = ep_desc;
       } else {
-        ESP_ERROR_CHECK(usb_host_transfer_alloc(
-            ep_desc->wMaxPacketSize*PRINTER_OUT_BUFFERS,
-            0, &printer_out));
-        printer_out->device_handle = dev_hdl;
-        printer_out->bEndpointAddress = ep_desc->bEndpointAddress;
-        printer_out->callback = printer_transfer_cb;
-        printer_out->context = NULL;
+        out_ep_desc = ep_desc;
       }
     }
+  }
+
+  if (in_ep_desc != nullptr && out_ep_desc != nullptr) {
+    printer = new Printer(dev_hdl, in_ep_desc, out_ep_desc);
+    esc_pos_printer = new ESC_POS_Printer(printer);
+  }
 }
 
 void setup()
@@ -112,57 +121,74 @@ void setup()
 //  delay(1000);
 //  pinMode(15, OUTPUT);
 //  delay(500);
-//  Serial.begin(115200, SERIAL_8N1, 33, 34);
-//  Serial.setDebugOutput(true);
-//  Serial.println("Gumo powerup");
+  Serial.begin(115200, SERIAL_8N1, 33, 34);
+  Serial.setDebugOutput(true);
+  Serial.println("Gumo powerup");
 
-   usbh_setup(usb_new_device_cb);
+  TaskHandle_t usb_host_driver_task_hdl;
+  xTaskCreate(usbh_task,
+              "usb_host_driver",
+              4096,
+              (void *)usb_new_device_cb,
+              0,
+              &usb_host_driver_task_hdl);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(WIFI_PS_NONE);
+  // Set hostname so that they're easier to identify in the dashboard
+  // Apparently required to get setHostname to work due to a bug
+  //WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
+  WiFi.config(((u32_t)0x0UL),((u32_t)0x0UL),((u32_t)0x0UL));
+  WiFi.setHostname("printi");
+
+//  WiFi.mode(WIFI_AP);
+//  WiFi.softAP("esp32", NULL);
+  WiFi.begin("virus89.exe-24ghz", "Mangoldsalat2019");
+
+  for (int i = 5; i <= 5; i++) {
+    if (WiFi.waitForConnectResult() == WL_CONNECTED) {
+      Serial.print("WiFi connected: ");
+      Serial.println(WiFi.localIP());
+      return;
+    }
+  }
+
 
 }
 
 void loop()
 {
-  // TODO(Leon Handreke): Migrate this to a separate task?
-  usbh_task();
+  if (printer == nullptr) {
+    return;
+  }
 
-  // ESP32 S2 Typewriter
-  // Read line from serial monitor and write to printer.
-//  String aLine = Serial.readStringUntil('\n');  // Read line ending with newline
-//
-//  if (aLine.length() > 0) {
-//    // readStringUntil removes the newline so add it back
-//    aLine.concat('\n');
-//    PrinterOut->num_bytes = aLine.length();
-//    memcpy(PrinterOut->data_buffer, aLine.c_str(), PrinterOut->num_bytes);
-//    esp_err_t err = usb_host_transfer_submit(PrinterOut);
-//    if (err != ESP_OK) {
-//      ESP_LOGI("", "usb_host_transfer_submit Out fail: %x", err);
-//    }
-//  }
+  static int printed_msg = 0;
+  if (!printed_msg) {
+    ESP_LOGI("", "PRint hello fonsi");
+    esc_pos_printer->println(F("Hello fonsi!"));
+    //esc_pos_printer->feedRows(1);
+    printed_msg = 1;
+  }
 
-//  if (PrinterOut != NULL && !printed_image) {
-//    printed_image = 1;
-//
-//    char* image = (char*) logo_h58_start;
+
+
+  String url = PRINTI_API_SERVER_BASE_URL + "/nextinqueue/mango";
+  wifiClient.setInsecure();
+  http.begin(wifiClient, url);
+  http.setTimeout(40 * 1000);
+  int response_code = http.GET();
+
+  if (response_code == 200) {
+    String response = http.getString();
+    ESP_LOGI("", "reponse length %d", response.length());
+    printer->write((const uint8_t *)response.c_str(), response.length());
+  } else {
+    ESP_LOGI("", "HTTP response code: %x", response_code);
+  }
+
+  vTaskDelay(10);
+
+
+//    char *image = (char *) logo_h58_start;
 //    int image_len = logo_h58_end - logo_h58_start;
-//
-//    ESP_LOGI("", "logo_h58 length %d", image_len);
-//
-//    while (image_len > 0) {
-//      int tx_len = image_len > PrinterOut->data_buffer_size ? PrinterOut->data_buffer_size : image_len;
-//
-//      ESP_LOGI("", "transmit len %d", tx_len);
-//
-//      PrinterOut->num_bytes = tx_len;
-//      memcpy(PrinterOut->data_buffer, image, tx_len);
-//      image = image + tx_len;
-//      image_len = image_len - tx_len;
-//
-//      esp_err_t err = usb_host_transfer_submit(PrinterOut);
-//      if (err != ESP_OK) {
-//        ESP_LOGI("", "usb_host_transfer_submit Out fail: %x", err);
-//      }
-//    }
-//
-//  }
 }

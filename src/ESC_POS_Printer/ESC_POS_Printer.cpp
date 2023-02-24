@@ -32,7 +32,7 @@ Reference: https://reference.epson-biz.com/modules/ref_escpos/index.php?content_
 #define ASCII_GS   29  // Group separator
 
 // Constructor
-ESC_POS_Printer::ESC_POS_Printer(Stream *s) :
+ESC_POS_Printer::ESC_POS_Printer(Print *s) :
     stream(s) {
     }
 
@@ -486,20 +486,21 @@ void ESC_POS_Printer::wake() {
 // ability.  Returns true for paper, false for no paper.
 // Might not work on all printers!
 bool ESC_POS_Printer::hasPaper() {
-    //  writeBytes(ASCII_DLE, ASCII_EOT, 4);
-    writeBytes(ASCII_GS, 'r', 1);
-    //  writeBytes(ASCII_ESC, 'v');
-
-    int status = 0;
-    for(uint8_t i=0; i<10; i++) {
-        if(stream->available()) {
-            status = stream->read();
-            break;
-        }
-        delay(100);
-    }
-
-    return !(status & 0b00001100);
+//    //  writeBytes(ASCII_DLE, ASCII_EOT, 4);
+//    writeBytes(ASCII_GS, 'r', 1);
+//    //  writeBytes(ASCII_ESC, 'v');
+//
+//    int status = 0;
+//    for(uint8_t i=0; i<10; i++) {
+//        if(stream->available()) {
+//            status = stream->read();
+//            break;
+//        }
+//        delay(100);
+//    }
+//
+//    return !(status & 0b00001100);
+  return true;
 }
 
 void ESC_POS_Printer::setLineHeight(int val) {

@@ -118,7 +118,7 @@ class ESC_POS_Printer : public Print {
 
         // IMPORTANT: constructor syntax has changed from prior versions
         // of this library.  Please see notes in the example code!
-        ESC_POS_Printer(Stream *s=&Serial);
+        ESC_POS_Printer(Print *s=&Serial);
 
         size_t
             write(uint8_t c);
@@ -173,7 +173,7 @@ class ESC_POS_Printer : public Print {
 
     private:
 
-        Stream
+        Print
             *stream;
         uint8_t
             printMode,
