@@ -153,28 +153,86 @@ void setup()
     }
   }
 
-
+  // TODO(Leon Handreke): Proper https
+  wifiClient.setInsecure();
 }
 
-void loop()
-{
+const char* getPrintiName() {
+  return "mango";
+}
+
+void printWifiConnectionInstructions() {
+  ESP_LOGI("", "Printing WiFi connection instructions");
+}
+
+void printPrintiServerErrorMessage() {
+  ESP_LOGI("", "Printing printi server error message");
+}
+
+bool canReach(String url) {
+  http.begin(wifiClient, url);
+  wifiClient.setInsecure();
+  http.setTimeout(10 * 1000);
+  int response_code = http.GET();
+  if (response_code == 200) {
+    return true;
+  } else {
+    return false;
+  }
+}
+
+typedef enum {
+  PRINTI_STATE_NO_WIFI,
+  PRINTI_STATE_CANNOT_REACH_SERVER,
+  PRINTI_STATE_HEALTHY,
+} printi_error_state_t;
+
+printi_error_state_t printi_error_state = PRINTI_STATE_HEALTHY;
+
+bool printed_startup_image = false;
+
+void loop() {
   if (printer == nullptr) {
     return;
   }
 
-  static int printed_msg = 0;
-  if (!printed_msg) {
-    ESP_LOGI("", "PRint hello fonsi");
-    esc_pos_printer->println(F("Hello fonsi!"));
-    //esc_pos_printer->feedRows(1);
-    printed_msg = 1;
+  if (WiFi.status() != WL_CONNECTED) {
+    if (printi_error_state == PRINTI_STATE_HEALTHY || printi_error_state == PRINTI_STATE_CANNOT_REACH_SERVER) {
+      printi_error_state = PRINTI_STATE_NO_WIFI;
+      printWifiConnectionInstructions();
+      return;
+    }
+  }
+
+  if (!canReach(PRINTI_API_SERVER_BASE_URL)) {
+    if (printi_error_state == PRINTI_STATE_HEALTHY) {
+      printi_error_state = PRINTI_STATE_CANNOT_REACH_SERVER;
+      printPrintiServerErrorMessage();
+      return;
+    }
+  }
+
+  // We're transitioning to PRINTI_STATE_HEALTHY!
+  if (printi_error_state != PRINTI_STATE_HEALTHY) {
+    esc_pos_printer->println("Connected! Go to: ");
+    esc_pos_printer->print("  printi.me/");
+    esc_pos_printer->println(getPrintiName());
+
+    printi_error_state = PRINTI_STATE_HEALTHY;
+  }
+
+  // Print welcome image
+  if (!printed_startup_image) {
+    const char *image = (const char *) logo_h58_start;
+    size_t image_len = logo_h58_end - logo_h58_start;
+    printer->write((const uint8_t *) image, image_len);
+    printed_startup_image = true;
   }
 
 
-
-  String url = PRINTI_API_SERVER_BASE_URL + "/nextinqueue/mango";
-  wifiClient.setInsecure();
+  String url = PRINTI_API_SERVER_BASE_URL + "/nextinqueue/" + getPrintiName();
   http.begin(wifiClient, url);
+  wifiClient.setInsecure();
   http.setTimeout(40 * 1000);
   int response_code = http.GET();
 
@@ -182,13 +240,12 @@ void loop()
     String response = http.getString();
     ESP_LOGI("", "reponse length %d", response.length());
     printer->write((const uint8_t *)response.c_str(), response.length());
+    esc_pos_printer->println("");
+    esc_pos_printer->println("");
+    esc_pos_printer->println("");
   } else {
     ESP_LOGI("", "HTTP response code: %x", response_code);
   }
 
   vTaskDelay(10);
-
-
-//    char *image = (char *) logo_h58_start;
-//    int image_len = logo_h58_end - logo_h58_start;
 }
