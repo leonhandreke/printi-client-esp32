@@ -28,6 +28,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WebServer.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -41,10 +42,15 @@
 extern const uint8_t logo_h58_start[] asm("_binary_resources_logo_h58_start");
 extern const uint8_t logo_h58_end[] asm("_binary_resources_logo_h58_end");
 
+extern const uint8_t config_html_start[] asm("_binary_resources_config_html_start");
+extern const uint8_t config_html_end[] asm("_binary_resources_config_html_end");
+
 String PRINTI_API_SERVER_BASE_URL = "https://api.printi.me";
 
 WiFiClientSecure wifiClient;
 HTTPClient http;
+
+WebServer* server;
 
 Printer* printer = NULL;
 ESC_POS_Printer* esc_pos_printer = NULL;
@@ -114,6 +120,72 @@ void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_devi
   }
 }
 
+void _configServerLoop(void *pvParameters) {
+  ESP_LOGI("", "Starting config server task");
+  while (true) {
+    if (server == nullptr) {
+      ESP_LOGI("", "Server stopped, ending config server task");
+      vTaskDelete(NULL);
+      return;
+    }
+    server->handleClient();
+    vTaskDelay(30);
+  }
+}
+
+void startConfigServer() {
+  // If server already started, error out
+  if (server != nullptr) {
+    return;
+  }
+
+  WiFi.mode(WIFI_MODE_AP);
+  WiFi.softAP("printi", "12345678");
+  ESP_LOGI("", "Started AP at IP %s", WiFi.softAPIP().toString().c_str());
+
+  server = new WebServer(80);
+  server->on("/", HTTP_GET, []() -> void {
+    ESP_LOGI("", "on /");
+    server->send(200, "text/html", (const char*) config_html_start);
+  });
+  server->begin();
+
+  ESP_LOGI("", "Creating config server task");
+  xTaskCreate(
+      _configServerLoop,    // Function that should be called
+      "Config server",  // Name of the task (for debugging)
+      10000,            // Stack size (bytes)
+      NULL,            // Parameter to pass
+      10,               // Task priority
+      NULL             // Task handle
+  );
+}
+
+void stopConfigServer() {
+  server->stop();
+  delete server;
+}
+
+void _handleButtonLoop(void *pvParameters) {
+  while(true) {
+    if (digitalRead(0) == LOW) {
+      ESP_LOGI("", "Button pressed, starting config server");
+      startConfigServer();
+    }
+    vTaskDelay(40);
+  }
+}
+void startButtonHandler() {
+  xTaskCreate(
+      _handleButtonLoop,    // Function that should be called
+      "Handle Button",  // Name of the task (for debugging)
+      10000,            // Stack size (bytes)
+      NULL,            // Parameter to pass
+      10,               // Task priority
+      NULL             // Task handle
+  );
+}
+
 void setup()
 {
     esp_log_level_set("*", ESP_LOG_DEBUG);
@@ -124,6 +196,8 @@ void setup()
   Serial.begin(115200, SERIAL_8N1, 33, 34);
   Serial.setDebugOutput(true);
   Serial.println("Gumo powerup");
+
+  startButtonHandler();
 
   TaskHandle_t usb_host_driver_task_hdl;
   xTaskCreate(usbh_task,
