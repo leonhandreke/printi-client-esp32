@@ -188,6 +188,17 @@ typedef enum {
 } printi_error_state_t;
 
 printi_error_state_t printi_error_state = PRINTI_STATE_HEALTHY;
+time_t printi_error_state_since;
+bool printi_error_state_message_printed;
+
+void set_printi_error_state(printi_error_state_t new_state) {
+  if (printi_error_state == new_state) {
+    return;
+  }
+  printi_error_state = new_state;
+  printi_error_state_since = time(NULL);
+  printi_error_state_message_printed = false;
+}
 
 bool printed_startup_image = false;
 
@@ -198,8 +209,12 @@ void loop() {
 
   if (WiFi.status() != WL_CONNECTED) {
     if (printi_error_state == PRINTI_STATE_HEALTHY || printi_error_state == PRINTI_STATE_CANNOT_REACH_SERVER) {
-      printi_error_state = PRINTI_STATE_NO_WIFI;
-      printWifiConnectionInstructions();
+      set_printi_error_state(PRINTI_STATE_NO_WIFI);
+      time_t error_state_duration = time(NULL) - printi_error_state_since;
+      if (!printi_error_state_message_printed && error_state_duration > (5*60)) {
+        printWifiConnectionInstructions();
+        printi_error_state_message_printed = true;
+      }
       return;
     }
   }
@@ -207,25 +222,34 @@ void loop() {
   if (!canReach(PRINTI_API_SERVER_BASE_URL)) {
     if (printi_error_state == PRINTI_STATE_HEALTHY) {
       printi_error_state = PRINTI_STATE_CANNOT_REACH_SERVER;
-      printPrintiServerErrorMessage();
+      time_t error_state_duration = time(NULL) - printi_error_state_since;
+      if (!printi_error_state_message_printed && error_state_duration > (5*60)) {
+        printPrintiServerErrorMessage();
+        printi_error_state_message_printed = true;
+      }
       return;
     }
   }
 
   // We're transitioning to PRINTI_STATE_HEALTHY!
   if (printi_error_state != PRINTI_STATE_HEALTHY) {
-    esc_pos_printer->println("Connected! Go to: ");
-    esc_pos_printer->print("  printi.me/");
-    esc_pos_printer->println(getPrintiName());
+    set_printi_error_state(PRINTI_STATE_HEALTHY);
 
-    printi_error_state = PRINTI_STATE_HEALTHY;
+    ESP_LOGI("", "Print Connected to printi.me message");
+    //esc_pos_printer->println("Connected! Go to: ");
+    //esc_pos_printer->print("  printi.me/");
+    //esc_pos_printer->println(getPrintiName());
+
+    printi_error_state_message_printed = true;
+
   }
 
   // Print welcome image
   if (!printed_startup_image) {
     const char *image = (const char *) logo_h58_start;
     size_t image_len = logo_h58_end - logo_h58_start;
-    printer->write((const uint8_t *) image, image_len);
+    ESP_LOGI("", "Print startup image");
+    //printer->write((const uint8_t *) image, image_len);
     printed_startup_image = true;
   }
 
