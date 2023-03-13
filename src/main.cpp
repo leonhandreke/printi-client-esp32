@@ -166,6 +166,10 @@ void stopConfigServer() {
   delete server;
 }
 
+void enterConfigMode() {
+
+}
+
 void _handleButtonLoop(void *pvParameters) {
   while(true) {
     if (digitalRead(0) == LOW) {
@@ -237,10 +241,12 @@ const char* getPrintiName() {
 
 void printWifiConnectionInstructions() {
   ESP_LOGI("", "Printing WiFi connection instructions");
+  esc_pos_printer->println("Error: cannot connect to WiFi.");
 }
 
 void printPrintiServerErrorMessage() {
   ESP_LOGI("", "Printing printi server error message");
+  esc_pos_printer->println("Error: cannot reach printi server.");
 }
 
 bool canReach(String url) {
@@ -295,7 +301,7 @@ void loop() {
 
   if (!canReach(PRINTI_API_SERVER_BASE_URL)) {
     if (printi_error_state == PRINTI_STATE_HEALTHY) {
-      printi_error_state = PRINTI_STATE_CANNOT_REACH_SERVER;
+      set_printi_error_state(PRINTI_STATE_CANNOT_REACH_SERVER);
       time_t error_state_duration = time(NULL) - printi_error_state_since;
       if (!printi_error_state_message_printed && error_state_duration > (5*60)) {
         printPrintiServerErrorMessage();
@@ -305,15 +311,20 @@ void loop() {
     }
   }
 
-  // We're transitioning to PRINTI_STATE_HEALTHY!
+  // We're PRINTI_STATE_HEALTHY!
+
+  // If we were previously unhealthy
   if (printi_error_state != PRINTI_STATE_HEALTHY) {
+    // Print the Connected message only if the error was previously printed.
+    // If not, it was just a transient error that users don't have to know about.
+    if (!printi_error_state_message_printed) {
+      ESP_LOGI("", "Print Connected to printi.me message");
+      esc_pos_printer->println("Connected! Go to: ");
+      esc_pos_printer->print("  printi.me/");
+      esc_pos_printer->println(getPrintiName());
+    }
+
     set_printi_error_state(PRINTI_STATE_HEALTHY);
-
-    ESP_LOGI("", "Print Connected to printi.me message");
-    //esc_pos_printer->println("Connected! Go to: ");
-    //esc_pos_printer->print("  printi.me/");
-    //esc_pos_printer->println(getPrintiName());
-
     printi_error_state_message_printed = true;
 
   }
@@ -323,7 +334,7 @@ void loop() {
     const char *image = (const char *) logo_h58_start;
     size_t image_len = logo_h58_end - logo_h58_start;
     ESP_LOGI("", "Print startup image");
-    //printer->write((const uint8_t *) image, image_len);
+    printer->write((const uint8_t *) image, image_len);
     printed_startup_image = true;
   }
 
