@@ -29,6 +29,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WebServer.h>
+#include <Preferences.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -46,6 +47,11 @@ extern const uint8_t config_html_start[] asm("_binary_resources_config_html_star
 extern const uint8_t config_html_end[] asm("_binary_resources_config_html_end");
 
 String PRINTI_API_SERVER_BASE_URL = "https://api.printi.me";
+
+const char* PREFERENCES_KEY_WIFI_SSID = "wifiSsid";
+const char* PREFERENCES_KEY_WIFI_PASSKEY = "wifiPasskey";
+
+Preferences preferences;
 
 WiFiClientSecure wifiClient;
 HTTPClient http;
@@ -148,6 +154,13 @@ void startConfigServer() {
     ESP_LOGI("", "on /");
     server->send(200, "text/html", (const char*) config_html_start);
   });
+  server->on("/", HTTP_POST, []() -> void {
+    ESP_LOGI("", "on POST /");
+    preferences.putString(PREFERENCES_KEY_WIFI_SSID, server->arg("ssid"));
+    preferences.putString(PREFERENCES_KEY_WIFI_PASSKEY, server->arg("passkey"));
+
+    server->send(200, "text/html", (const char*) config_html_start);
+  });
   server->begin();
 
   ESP_LOGI("", "Creating config server task");
@@ -164,10 +177,6 @@ void startConfigServer() {
 void stopConfigServer() {
   server->stop();
   delete server;
-}
-
-void enterConfigMode() {
-
 }
 
 void _handleButtonLoop(void *pvParameters) {
@@ -201,6 +210,8 @@ void setup()
   Serial.setDebugOutput(true);
   Serial.println("Gumo powerup");
 
+  preferences.begin("printi");
+
   startButtonHandler();
 
   TaskHandle_t usb_host_driver_task_hdl;
@@ -219,15 +230,21 @@ void setup()
   WiFi.config(((u32_t)0x0UL),((u32_t)0x0UL),((u32_t)0x0UL));
   WiFi.setHostname("printi");
 
-//  WiFi.mode(WIFI_AP);
-//  WiFi.softAP("esp32", NULL);
-  WiFi.begin("virus89.exe-24ghz", "Mangoldsalat2019");
+  String wifiSsid = preferences.getString(PREFERENCES_KEY_WIFI_SSID, "");
+  String wifiPasskey = preferences.getString(PREFERENCES_KEY_WIFI_PASSKEY, "");
 
-  for (int i = 5; i <= 5; i++) {
-    if (WiFi.waitForConnectResult() == WL_CONNECTED) {
-      Serial.print("WiFi connected: ");
-      Serial.println(WiFi.localIP());
-      return;
+  if (wifiSsid == "") {
+    ESP_LOGI("", "Stored WiFi SSID is empty, starting config server");
+    startConfigServer();
+  } else {
+    WiFi.begin(wifiSsid.c_str(), wifiPasskey.c_str());
+
+    for (int i = 5; i <= 5; i++) {
+      if (WiFi.waitForConnectResult() == WL_CONNECTED) {
+        Serial.print("WiFi connected: ");
+        Serial.println(WiFi.localIP());
+        return;
+      }
     }
   }
 
@@ -288,27 +305,23 @@ void loop() {
   }
 
   if (WiFi.status() != WL_CONNECTED) {
-    if (printi_error_state == PRINTI_STATE_HEALTHY || printi_error_state == PRINTI_STATE_CANNOT_REACH_SERVER) {
-      set_printi_error_state(PRINTI_STATE_NO_WIFI);
-      time_t error_state_duration = time(NULL) - printi_error_state_since;
-      if (!printi_error_state_message_printed && error_state_duration > (5*60)) {
-        printWifiConnectionInstructions();
-        printi_error_state_message_printed = true;
-      }
-      return;
+    set_printi_error_state(PRINTI_STATE_NO_WIFI);
+    time_t error_state_duration = time(NULL) - printi_error_state_since;
+    if (!printi_error_state_message_printed && error_state_duration > (5*60)) {
+      printWifiConnectionInstructions();
+      printi_error_state_message_printed = true;
     }
+    return;
   }
 
   if (!canReach(PRINTI_API_SERVER_BASE_URL)) {
-    if (printi_error_state == PRINTI_STATE_HEALTHY) {
-      set_printi_error_state(PRINTI_STATE_CANNOT_REACH_SERVER);
-      time_t error_state_duration = time(NULL) - printi_error_state_since;
-      if (!printi_error_state_message_printed && error_state_duration > (5*60)) {
-        printPrintiServerErrorMessage();
-        printi_error_state_message_printed = true;
-      }
-      return;
+    set_printi_error_state(PRINTI_STATE_CANNOT_REACH_SERVER);
+    time_t error_state_duration = time(NULL) - printi_error_state_since;
+    if (!printi_error_state_message_printed && error_state_duration > (5*60)) {
+      printPrintiServerErrorMessage();
+      printi_error_state_message_printed = true;
     }
+    return;
   }
 
   // We're PRINTI_STATE_HEALTHY!
