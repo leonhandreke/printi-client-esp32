@@ -30,6 +30,7 @@
 #include <HTTPClient.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include <ArduinoOTA.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -126,6 +127,54 @@ void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_devi
   }
 }
 
+void _handleOtaUploadLoop(void *pvParameters) {
+  while (true) {
+    ArduinoOTA.handle();
+    vTaskDelay(500);
+  }
+}
+void startOtaUploadService() {
+  ArduinoOTA
+      .onStart([]() {
+
+        String type;
+        if (ArduinoOTA.getCommand() == U_FLASH)
+          type = "sketch";
+        else // U_SPIFFS
+          type = "filesystem";
+
+        // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+        Serial.println("Start updating " + type);
+      })
+      .onEnd([]() {
+        ESP_LOGI("OTA", "End");
+      })
+      .onProgress([](unsigned int progress, unsigned int total) {
+        ESP_LOGI("OTA", "Progress: %u%%\r", (progress / (total / 100)));
+      })
+      .onError([](ota_error_t error) {
+        ESP_LOGE("OTA", "Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) ESP_LOGE("OTA", "Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) ESP_LOGE("OTA", "Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) ESP_LOGE("OTA", "Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) ESP_LOGE("OTA", "Receive Failed");
+        else if (error == OTA_END_ERROR) ESP_LOGE("OTA", "End Failed");
+      });
+
+  ArduinoOTA.setHostname(WiFi.getHostname());
+  ArduinoOTA.setPassword("admin");
+  ArduinoOTA.begin();
+
+  xTaskCreate(
+      _handleOtaUploadLoop,    // Function that should be called
+      "Handle OTA Upload",  // Name of the task (for debugging)
+      10000,            // Stack size (bytes)
+      NULL,            // Parameter to pass
+      10,               // Task priority
+      NULL             // Task handle
+  );
+}
+
 void _configServerLoop(void *pvParameters) {
   ESP_LOGI("", "Starting config server task");
   while (true) {
@@ -135,7 +184,7 @@ void _configServerLoop(void *pvParameters) {
       return;
     }
     server->handleClient();
-    vTaskDelay(30);
+    vTaskDelay(50);
   }
 }
 
@@ -185,7 +234,7 @@ void _handleButtonLoop(void *pvParameters) {
       ESP_LOGI("", "Button pressed, starting config server");
       startConfigServer();
     }
-    vTaskDelay(40);
+    vTaskDelay(500);
   }
 }
 void startButtonHandler() {
@@ -227,7 +276,7 @@ void setup()
   // Set hostname so that they're easier to identify in the dashboard
   // Apparently required to get setHostname to work due to a bug
   //WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
-  WiFi.config(((u32_t)0x0UL),((u32_t)0x0UL),((u32_t)0x0UL));
+  //WiFi.config(((u32_t)0x0UL),((u32_t)0x0UL),((u32_t)0x0UL));
   WiFi.setHostname("printi");
 
   String wifiSsid = preferences.getString(PREFERENCES_KEY_WIFI_SSID, "");
@@ -241,12 +290,13 @@ void setup()
 
     for (int i = 5; i <= 5; i++) {
       if (WiFi.waitForConnectResult() == WL_CONNECTED) {
-        Serial.print("WiFi connected: ");
-        Serial.println(WiFi.localIP());
-        return;
+        ESP_LOGI("", "WiFi connected: %s", WiFi.localIP());
+        break;
       }
     }
   }
+
+  startOtaUploadService();
 
   // TODO(Leon Handreke): Proper https
   wifiClient.setInsecure();
@@ -286,7 +336,7 @@ typedef enum {
 
 printi_error_state_t printi_error_state = PRINTI_STATE_HEALTHY;
 time_t printi_error_state_since;
-bool printi_error_state_message_printed;
+bool printi_error_state_message_printed = true;
 
 void set_printi_error_state(printi_error_state_t new_state) {
   if (printi_error_state == new_state) {
@@ -330,7 +380,7 @@ void loop() {
   if (printi_error_state != PRINTI_STATE_HEALTHY) {
     // Print the Connected message only if the error was previously printed.
     // If not, it was just a transient error that users don't have to know about.
-    if (!printi_error_state_message_printed) {
+    if (printi_error_state_message_printed) {
       ESP_LOGI("", "Print Connected to printi.me message");
       esc_pos_printer->println("Connected! Go to: ");
       esc_pos_printer->print("  printi.me/");
