@@ -28,12 +28,14 @@ const TickType_t HOST_EVENT_TIMEOUT = 1;
 const TickType_t CLIENT_EVENT_TIMEOUT = 1;
 
 typedef void (*usb_host_new_device_cb_t)(usb_host_client_handle_t client_hdl, usb_device_handle_t dev_hdl);
+typedef void (*usb_host_device_gone_cb_t)(usb_host_client_handle_t client_hdl, usb_device_handle_t dev_hdl);
 
 typedef struct {
   usb_host_client_handle_t client_hdl;
   uint8_t dev_addr;
   usb_device_handle_t dev_hdl;
   usb_host_new_device_cb_t new_device_cb;
+  usb_host_device_gone_cb_t device_gone_cb;
 } class_driver_t;
 
 void _client_event_callback(const usb_host_client_event_msg_t *event_msg, void *arg)
@@ -78,7 +80,14 @@ void _client_event_callback(const usb_host_client_event_msg_t *event_msg, void *
       break;
     /**< A device opened by the client is now gone */
     case USB_HOST_CLIENT_EVENT_DEV_GONE:
+      if (event_msg->dev_gone.dev_hdl != driver_obj->dev_hdl) {
+        // We don't care about devices not managed by us
+        return;
+      }
       ESP_LOGI("", "Device Gone handle: %x", event_msg->dev_gone.dev_hdl);
+      driver_obj->device_gone_cb(driver_obj->client_hdl, driver_obj->dev_hdl);
+      ESP_LOGI("", "Device Gone callback executed: %x", event_msg->dev_gone.dev_hdl);
+      ESP_ERROR_CHECK(usb_host_device_close(driver_obj->client_hdl, driver_obj->dev_hdl));
       driver_obj->dev_hdl = NULL;
       driver_obj->dev_addr = 0;
       break;
@@ -90,7 +99,7 @@ void _client_event_callback(const usb_host_client_event_msg_t *event_msg, void *
 
 // Reference: esp-idf/examples/peripherals/usb/host/usb_host_lib/main/usb_host_lib_main.c
 
-class_driver_t* usbh_setup(usb_host_new_device_cb_t new_device_cb) {
+class_driver_t* usbh_setup(usb_host_new_device_cb_t new_device_cb, usb_host_device_gone_cb_t device_gone_cb) {
   class_driver_t *driver_obj = (class_driver_t *) malloc(sizeof(class_driver_t));
   // Initialize dev_addr because that's how we know we're not yet attached to a device;
   driver_obj->dev_addr = 0;
@@ -113,6 +122,7 @@ class_driver_t* usbh_setup(usb_host_new_device_cb_t new_device_cb) {
   ESP_LOGI("", "usb_host_client_register: %x", err);
 
   driver_obj->new_device_cb = new_device_cb;
+  driver_obj->device_gone_cb = device_gone_cb;
 
   return driver_obj;
 }
@@ -146,8 +156,10 @@ void usbh_handle(class_driver_t *driver_obj)
 }
 
 void usbh_task(void *arg) {
-  usb_host_new_device_cb_t new_device_cb = (usb_host_new_device_cb_t) arg;
-  class_driver_t *driver_obj = usbh_setup(new_device_cb);
+  void** args = (void**) arg;
+  usb_host_new_device_cb_t new_device_cb = (usb_host_new_device_cb_t) args[0];
+  usb_host_device_gone_cb_t device_gone_cb = (usb_host_device_gone_cb_t) args[1];
+  class_driver_t *driver_obj = usbh_setup(new_device_cb, device_gone_cb);
 
   while (true) {
     usbh_handle(driver_obj);

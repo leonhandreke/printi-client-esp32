@@ -76,6 +76,11 @@ size_t ESC_POS_Printer::write(uint8_t c) {
     return 1;
 }
 
+size_t ESC_POS_Printer::write(const uint8_t *buffer, size_t size) {
+  stream->write(buffer, size);
+  return 1;
+}
+
 void ESC_POS_Printer::begin() {
 
     // The printer can't start receiving data immediately upon power up --

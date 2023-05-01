@@ -25,6 +25,7 @@
 #define ARDUINO_USB_MODE 1
 #define ARDUINO_USB_CDC_ON_BOOT 0
 
+#include <string.h>
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -38,6 +39,7 @@
 #include "ESC_POS_Printer/ESC_POS_Printer.h"
 
 #include "usbh.hpp"
+#include "string_helper.h"
 
 #include "Printer.hpp"
 
@@ -49,8 +51,12 @@ extern const uint8_t config_html_end[] asm("_binary_resources_config_html_end");
 
 String PRINTI_API_SERVER_BASE_URL = "https://api.printi.me";
 
+const char* PREFERENCES_KEY_PRINTI_NAME = "printiName";
 const char* PREFERENCES_KEY_WIFI_SSID = "wifiSsid";
 const char* PREFERENCES_KEY_WIFI_PASSKEY = "wifiPasskey";
+
+const char* CONFIG_MODE_AP_SSID = "printi";
+const char* CONFIG_MODE_AP_PASSKEY = "12345678";
 
 Preferences preferences;
 
@@ -59,8 +65,17 @@ HTTPClient http;
 
 WebServer* server;
 
+// TODO(Leon Handreke): USB handling is a fucking mess, there should not be three files that this is scattered over
+// Needs much better separation of concerns!
+uint8_t bInterfaceNumber;
+uint8_t bInEndpointAddress;
+uint8_t bOutEndpointAddress;
+
 Printer* printer = NULL;
+// ESC_POS_Printer is just a thin wrapper around Printer to implement some printer controll commands.
 ESC_POS_Printer* esc_pos_printer = NULL;
+
+bool otaUpdateInProgress = false;
 
 
 void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_device_handle_t dev_hdl)
@@ -122,9 +137,46 @@ void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_devi
   }
 
   if (in_ep_desc != nullptr && out_ep_desc != nullptr) {
+    bInterfaceNumber = printer_intf_desc->bInterfaceNumber;
+    bInEndpointAddress = in_ep_desc->bEndpointAddress;
+    bOutEndpointAddress = out_ep_desc->bEndpointAddress;
+
     printer = new Printer(dev_hdl, in_ep_desc, out_ep_desc);
     esc_pos_printer = new ESC_POS_Printer(printer);
   }
+}
+
+void usb_device_gone_cb(const usb_host_client_handle_t client_hdl, const usb_device_handle_t dev_hdl)
+{
+  delete printer;
+  printer = nullptr;
+
+  usb_host_endpoint_halt(dev_hdl, bInEndpointAddress);
+  usb_host_endpoint_halt(dev_hdl, bOutEndpointAddress);
+  usb_host_endpoint_flush(dev_hdl, bInEndpointAddress);
+  usb_host_endpoint_flush(dev_hdl, bOutEndpointAddress);
+  usb_host_interface_release(client_hdl, dev_hdl, bInterfaceNumber);
+}
+
+String getMacString() {
+  char efuseStr[8];
+  uint64_t efuseMac = ESP.getEfuseMac();
+  sprintf(efuseStr, "%x%x%x%x",
+          ((uint8_t *) (&efuseMac))[3],
+          ((uint8_t *) (&efuseMac))[2],
+          ((uint8_t *) (&efuseMac))[1],
+          ((uint8_t *) (&efuseMac))[0]
+  );
+  return String(efuseStr);
+}
+
+String getPrintiName() {
+  return preferences.getString(PREFERENCES_KEY_PRINTI_NAME);
+}
+
+void stopPrinter() {
+  delete printer;
+  printer = nullptr;
 }
 
 void _handleOtaUploadLoop(void *pvParameters) {
@@ -143,17 +195,23 @@ void startOtaUploadService() {
         else // U_SPIFFS
           type = "filesystem";
 
+        stopPrinter();
+        otaUpdateInProgress = true;
+
         // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
-        Serial.println("Start updating " + type);
+        ESP_LOGI("OTA", "Start updating %s", type);
       })
       .onEnd([]() {
+        otaUpdateInProgress = false;
         ESP_LOGI("OTA", "End");
       })
       .onProgress([](unsigned int progress, unsigned int total) {
+        otaUpdateInProgress = true;
         ESP_LOGI("OTA", "Progress: %u%%\r", (progress / (total / 100)));
       })
       .onError([](ota_error_t error) {
         ESP_LOGE("OTA", "Error[%u]: ", error);
+        otaUpdateInProgress = false;
         if (error == OTA_AUTH_ERROR) ESP_LOGE("OTA", "Auth Failed");
         else if (error == OTA_BEGIN_ERROR) ESP_LOGE("OTA", "Begin Failed");
         else if (error == OTA_CONNECT_ERROR) ESP_LOGE("OTA", "Connect Failed");
@@ -195,21 +253,45 @@ void startConfigServer() {
   }
 
   WiFi.mode(WIFI_MODE_AP);
-  WiFi.softAP("printi", "12345678");
+  WiFi.softAP(CONFIG_MODE_AP_SSID, CONFIG_MODE_AP_PASSKEY);
   ESP_LOGI("", "Started AP at IP %s", WiFi.softAPIP().toString().c_str());
 
   server = new WebServer(80);
   server->on("/", HTTP_GET, []() -> void {
     ESP_LOGI("", "on /");
-    server->send(200, "text/html", (const char*) config_html_start);
+
+    size_t config_html_len = strlen((const char*) config_html_start) + 1;
+    char* config_html = (char *) malloc(sizeof(char) * config_html_len);
+    memcpy(config_html, config_html_start, config_html_len);
+
+    strreplace(config_html,
+               "{{PRINTI_NAME}}",
+               preferences.getString(PREFERENCES_KEY_PRINTI_NAME).c_str());
+    strreplace(config_html,
+               "{{PRINTI_NAME_TITLE}}",
+               preferences.getString(PREFERENCES_KEY_PRINTI_NAME).c_str());
+    strreplace(config_html,
+               "{{SSID}}",
+               preferences.getString(PREFERENCES_KEY_WIFI_SSID).c_str());
+    strreplace(config_html,
+               "{{PASSKEY}}",
+               preferences.getString(PREFERENCES_KEY_WIFI_PASSKEY).c_str());
+
+    server->send(200, "text/html", (const char*) config_html);
+    free(config_html);
   });
   server->on("/", HTTP_POST, []() -> void {
     ESP_LOGI("", "on POST /");
+    preferences.putString(PREFERENCES_KEY_PRINTI_NAME, server->arg("printiName"));
     preferences.putString(PREFERENCES_KEY_WIFI_SSID, server->arg("ssid"));
     preferences.putString(PREFERENCES_KEY_WIFI_PASSKEY, server->arg("passkey"));
 
-    server->send(200, "text/html", (const char*) config_html_start);
+    server->send(200, "text/plain", "Preferences saved, restarting...");
+//    server->sendHeader("Location", "/", true);
+//    server->send(303 /* See Other */, "text/html", "");
+    ESP.restart();
   });
+
   server->begin();
 
   ESP_LOGI("", "Creating config server task");
@@ -241,7 +323,7 @@ void startButtonHandler() {
   xTaskCreate(
       _handleButtonLoop,    // Function that should be called
       "Handle Button",  // Name of the task (for debugging)
-      10000,            // Stack size (bytes)
+      5000,            // Stack size (bytes)
       NULL,            // Parameter to pass
       10,               // Task priority
       NULL             // Task handle
@@ -264,10 +346,11 @@ void setup()
   startButtonHandler();
 
   TaskHandle_t usb_host_driver_task_hdl;
+  void* params[] = {(void *)usb_new_device_cb, (void*)usb_device_gone_cb};
   xTaskCreate(usbh_task,
               "usb_host_driver",
               4096,
-              (void *)usb_new_device_cb,
+              (void*) params,
               0,
               &usb_host_driver_task_hdl);
 
@@ -277,7 +360,11 @@ void setup()
   // Apparently required to get setHostname to work due to a bug
   //WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
   //WiFi.config(((u32_t)0x0UL),((u32_t)0x0UL),((u32_t)0x0UL));
-  WiFi.setHostname("printi");
+  String hostname = "printi";
+  if (getPrintiName() != "") {
+    hostname = hostname + "-" + getPrintiName().c_str();
+  }
+  WiFi.setHostname(hostname.c_str());
 
   String wifiSsid = preferences.getString(PREFERENCES_KEY_WIFI_SSID, "");
   String wifiPasskey = preferences.getString(PREFERENCES_KEY_WIFI_PASSKEY, "");
@@ -302,13 +389,42 @@ void setup()
   wifiClient.setInsecure();
 }
 
-const char* getPrintiName() {
-  return "mango";
-}
-
 void printWifiConnectionInstructions() {
   ESP_LOGI("", "Printing WiFi connection instructions");
-  esc_pos_printer->println("Error: cannot connect to WiFi.");
+
+  esc_pos_printer->println("This printi is not connected to the internet :(");
+//  esc_pos_printer->println("");
+//  esc_pos_printer->println("=> Step 1:");
+//  esc_pos_printer->println("On the little printi brain board");
+//  esc_pos_printer->println("found on the bottom of your");
+//  esc_pos_printer->println("printi, press the button labeled");
+//  esc_pos_printer->println("\"0\"");
+//  esc_pos_printer->println("");
+//  esc_pos_printer->println("=> Step 2:");
+//  esc_pos_printer->println("On your phone/laptop, connect to");
+//  esc_pos_printer->println("the WiFi network emitted by this");
+//  esc_pos_printer->println("printi:");
+//  esc_pos_printer->println("");
+//  esc_pos_printer->println(String("      Name: ") + CONFIG_MODE_AP_SSID);
+//  esc_pos_printer->println(String("  Password: ") + CONFIG_MODE_AP_PASSKEY);
+//  esc_pos_printer->println("");
+//  esc_pos_printer->println("=> Step 3:");
+//  esc_pos_printer->println("After connecting, open a web");
+//  esc_pos_printer->println("browser and navigate to:");
+//  esc_pos_printer->println("   http://192.168.4.1/");
+//  esc_pos_printer->println("");
+//  esc_pos_printer->println("=> Step 4:");
+//  esc_pos_printer->println("Type in the name and password of");
+//  esc_pos_printer->println("the WiFi network that you want");
+//  esc_pos_printer->println("your printi to connect to, and");
+//  esc_pos_printer->println("press Save.");
+//  esc_pos_printer->println("");
+//  esc_pos_printer->println("Tip: The settings page can also be used to change the name of your printer! Store these instructions somewhere safe (or visit help.printi.me).");
+//  esc_pos_printer->println("");
+//  esc_pos_printer->println("That's it! Happy printing!");
+//  esc_pos_printer->println("");
+//  esc_pos_printer->println("");
+//  esc_pos_printer->println("");
 }
 
 void printPrintiServerErrorMessage() {
@@ -350,7 +466,14 @@ void set_printi_error_state(printi_error_state_t new_state) {
 bool printed_startup_image = false;
 
 void loop() {
+  if (otaUpdateInProgress) {
+    ESP_LOGI("", "OTA Update in progress, main thread suicide");
+    vTaskDelete(NULL);
+    return;
+  }
+
   if (printer == nullptr) {
+    vTaskDelay(500);
     return;
   }
 
@@ -398,6 +521,8 @@ void loop() {
     size_t image_len = logo_h58_end - logo_h58_start;
     ESP_LOGI("", "Print startup image");
     printer->write((const uint8_t *) image, image_len);
+    //printWifiConnectionInstructions();
+
     printed_startup_image = true;
   }
 
@@ -408,10 +533,17 @@ void loop() {
   http.setTimeout(40 * 1000);
   int response_code = http.GET();
 
+  // USB cable may have been unplugged since we started the request
+  if (printer == nullptr) {
+    return;
+  }
+
   if (response_code == 200) {
     String response = http.getString();
     ESP_LOGI("", "reponse length %d", response.length());
-    printer->write((const uint8_t *)response.c_str(), response.length());
+
+    printer->write((const uint8_t *) response.c_str(), response.length());
+
     esc_pos_printer->println("");
     esc_pos_printer->println("");
     esc_pos_printer->println("");
