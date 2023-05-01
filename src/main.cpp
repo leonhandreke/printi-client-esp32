@@ -43,6 +43,8 @@
 
 #include "Printer.hpp"
 
+#define TAG "main"
+
 extern const uint8_t logo_h58_start[] asm("_binary_resources_logo_h58_start");
 extern const uint8_t logo_h58_end[] asm("_binary_resources_logo_h58_end");
 
@@ -95,7 +97,7 @@ void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_devi
         cur_desc, config_desc->wTotalLength, USB_B_DESCRIPTOR_TYPE_INTERFACE, &cur_desc_offset);
 
     if (cur_desc == NULL) {
-      ESP_LOGI("", "Interface Descriptor not found");
+      ESP_LOGI(TAG, "Interface Descriptor not found");
       return;
     }
 
@@ -104,11 +106,11 @@ void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_devi
     // USB Printer Class Specification 1.1
     if ((intf_desc->bInterfaceClass == USB_CLASS_PRINTER) && (intf_desc->bInterfaceSubClass == 1)) {
       printer_intf_desc = intf_desc;
-      ESP_LOGI("", "Found printer interface at: %x", intf_desc->bInterfaceNumber);
+      ESP_LOGI(TAG, "Found printer interface at: %x", intf_desc->bInterfaceNumber);
     }
   }
 
-  ESP_LOGI("", "Claiming interface: %x", printer_intf_desc->bInterfaceNumber);
+  ESP_LOGI(TAG, "Claiming interface: %x", printer_intf_desc->bInterfaceNumber);
   ESP_ERROR_CHECK(usb_host_interface_claim(client_hdl, dev_hdl,
                                            printer_intf_desc->bInterfaceNumber,
                                            printer_intf_desc->bAlternateSetting));
@@ -234,10 +236,10 @@ void startOtaUploadService() {
 }
 
 void _configServerLoop(void *pvParameters) {
-  ESP_LOGI("", "Starting config server task");
+  ESP_LOGI(TAG, "Starting config server task");
   while (true) {
     if (server == nullptr) {
-      ESP_LOGI("", "Server stopped, ending config server task");
+      ESP_LOGI(TAG, "Server stopped, ending config server task");
       vTaskDelete(NULL);
       return;
     }
@@ -254,11 +256,11 @@ void startConfigServer() {
 
   WiFi.mode(WIFI_MODE_AP);
   WiFi.softAP(CONFIG_MODE_AP_SSID, CONFIG_MODE_AP_PASSKEY);
-  ESP_LOGI("", "Started AP at IP %s", WiFi.softAPIP().toString().c_str());
+  ESP_LOGI(TAG, "Started AP at IP %s", WiFi.softAPIP().toString().c_str());
 
   server = new WebServer(80);
   server->on("/", HTTP_GET, []() -> void {
-    ESP_LOGI("", "on /");
+    ESP_LOGI(TAG, "on /");
 
     size_t config_html_len = strlen((const char*) config_html_start) + 1;
     char* config_html = (char *) malloc(sizeof(char) * config_html_len);
@@ -281,7 +283,7 @@ void startConfigServer() {
     free(config_html);
   });
   server->on("/", HTTP_POST, []() -> void {
-    ESP_LOGI("", "on POST /");
+    ESP_LOGI(TAG, "on POST /");
     preferences.putString(PREFERENCES_KEY_PRINTI_NAME, server->arg("printiName"));
     preferences.putString(PREFERENCES_KEY_WIFI_SSID, server->arg("ssid"));
     preferences.putString(PREFERENCES_KEY_WIFI_PASSKEY, server->arg("passkey"));
@@ -294,7 +296,7 @@ void startConfigServer() {
 
   server->begin();
 
-  ESP_LOGI("", "Creating config server task");
+  ESP_LOGI(TAG, "Creating config server task");
   xTaskCreate(
       _configServerLoop,    // Function that should be called
       "Config server",  // Name of the task (for debugging)
@@ -313,7 +315,7 @@ void stopConfigServer() {
 void _handleButtonLoop(void *pvParameters) {
   while(true) {
     if (digitalRead(0) == LOW) {
-      ESP_LOGI("", "Button pressed, starting config server");
+      ESP_LOGI(TAG, "Button pressed, starting config server");
       startConfigServer();
     }
     vTaskDelay(500);
@@ -370,14 +372,14 @@ void setup()
   String wifiPasskey = preferences.getString(PREFERENCES_KEY_WIFI_PASSKEY, "");
 
   if (wifiSsid == "") {
-    ESP_LOGI("", "Stored WiFi SSID is empty, starting config server");
+    ESP_LOGI(TAG, "Stored WiFi SSID is empty, starting config server");
     startConfigServer();
   } else {
     WiFi.begin(wifiSsid.c_str(), wifiPasskey.c_str());
 
     for (int i = 5; i <= 5; i++) {
       if (WiFi.waitForConnectResult() == WL_CONNECTED) {
-        ESP_LOGI("", "WiFi connected: %s", WiFi.localIP());
+        ESP_LOGI(TAG, "WiFi connected: %s", WiFi.localIP());
         break;
       }
     }
@@ -390,7 +392,7 @@ void setup()
 }
 
 void printWifiConnectionInstructions() {
-  ESP_LOGI("", "Printing WiFi connection instructions");
+  ESP_LOGI(TAG, "Printing WiFi connection instructions");
 
   esc_pos_printer->println("This printi is not connected to the internet :(");
 //  esc_pos_printer->println("");
@@ -428,7 +430,7 @@ void printWifiConnectionInstructions() {
 }
 
 void printPrintiServerErrorMessage() {
-  ESP_LOGI("", "Printing printi server error message");
+  ESP_LOGI(TAG, "Printing printi server error message");
   esc_pos_printer->println("Error: cannot reach printi server.");
 }
 
@@ -467,7 +469,7 @@ bool printed_startup_image = false;
 
 void loop() {
   if (otaUpdateInProgress) {
-    ESP_LOGI("", "OTA Update in progress, main thread suicide");
+    ESP_LOGI(TAG, "OTA Update in progress, main thread suicide");
     vTaskDelete(NULL);
     return;
   }
@@ -504,7 +506,7 @@ void loop() {
     // Print the Connected message only if the error was previously printed.
     // If not, it was just a transient error that users don't have to know about.
     if (printi_error_state_message_printed) {
-      ESP_LOGI("", "Print Connected to printi.me message");
+      ESP_LOGI(TAG, "Print Connected to printi.me message");
       esc_pos_printer->println("Connected! Go to: ");
       esc_pos_printer->print("  printi.me/");
       esc_pos_printer->println(getPrintiName());
@@ -519,7 +521,7 @@ void loop() {
   if (!printed_startup_image) {
     const char *image = (const char *) logo_h58_start;
     size_t image_len = logo_h58_end - logo_h58_start;
-    ESP_LOGI("", "Print startup image");
+    ESP_LOGI(TAG, "Print startup image");
     printer->write((const uint8_t *) image, image_len);
     //printWifiConnectionInstructions();
 
@@ -540,7 +542,7 @@ void loop() {
 
   if (response_code == 200) {
     String response = http.getString();
-    ESP_LOGI("", "reponse length %d", response.length());
+    ESP_LOGI(TAG, "reponse length %d", response.length());
 
     printer->write((const uint8_t *) response.c_str(), response.length());
 
@@ -548,7 +550,7 @@ void loop() {
     esc_pos_printer->println("");
     esc_pos_printer->println("");
   } else {
-    ESP_LOGI("", "HTTP response code: %x", response_code);
+    ESP_LOGI(TAG, "HTTP response code: %x", response_code);
   }
 
   vTaskDelay(10);
