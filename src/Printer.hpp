@@ -1,3 +1,5 @@
+#pragma once
+
 #include <Arduino.h>
 
 #include <usb/usb_host.h>
@@ -5,7 +7,7 @@
 #include <FreeRTOS.h>
 #include <freertos/semphr.h>
 
-static const char* TAG = "Printer";
+static const char* PRINTER_TAG = "Printer";
 
 class Printer : public Print {
 private:
@@ -22,7 +24,7 @@ private:
   }
 
   void transfer_cb(usb_transfer_t* transfer) {
-    ESP_LOGI(TAG, "Release transfer semaphore");
+    ESP_LOGI(PRINTER_TAG, "Release transfer semaphore");
     xSemaphoreGive(transfer_mutex);
 
     ESP_LOGI("", "printer_transfer_cb context: %d", transfer->context);
@@ -34,7 +36,7 @@ public:
   const size_t OUT_BUFFER_SIZE = 1024;
 
   Printer(usb_device_handle_t dev_hdl, const usb_ep_desc_t* in_ep_desc, const usb_ep_desc_t* out_ep_desc) {
-    ESP_LOGI(TAG, "Constructing Printer, free heap %d", ESP.getFreeHeap());
+    ESP_LOGI(PRINTER_TAG, "Constructing Printer, free heap %d", ESP.getFreeHeap());
 
     ESP_ERROR_CHECK(usb_host_transfer_alloc(IN_BUFFER_SIZE, 0, &in_transfer));
     in_transfer->device_handle = dev_hdl;
@@ -43,7 +45,7 @@ public:
     in_transfer->context = this;
     ESP_LOGI("", "Allocated printer in transfer with data_buffer_size: %d", in_transfer->data_buffer_size);
 
-    ESP_LOGI(TAG, "Constructing out alloc, free heap %d", ESP.getFreeHeap());
+    ESP_LOGI(PRINTER_TAG, "Constructing out alloc, free heap %d", ESP.getFreeHeap());
     ESP_ERROR_CHECK(usb_host_transfer_alloc(
         OUT_BUFFER_SIZE,
         0, &out_transfer));
@@ -52,7 +54,7 @@ public:
     out_transfer->callback = _transfer_cb;
     out_transfer->context = this;
     ESP_LOGI("", "Allocated printer out transfer with data_buffer_size: %d", out_transfer->data_buffer_size);
-    ESP_LOGI(TAG, "Constructed out alloc, free heap %d", ESP.getFreeHeap());
+    ESP_LOGI(PRINTER_TAG, "Constructed out alloc, free heap %d", ESP.getFreeHeap());
 
     // TODO(Leon Handreke): This should be a mutex but somehow it crashes
     transfer_mutex = xSemaphoreCreateBinary();
@@ -61,15 +63,15 @@ public:
   }
 
   ~Printer() {
-    ESP_LOGI(TAG, "Starting to destruct, free heap %d", ESP.getFreeHeap());
+    ESP_LOGI(PRINTER_TAG, "Starting to destruct, free heap %d", ESP.getFreeHeap());
     usb_host_transfer_free(in_transfer);
     usb_host_transfer_free(out_transfer);
     vSemaphoreDelete(transfer_mutex);
-    ESP_LOGI(TAG, "Destructed, free heap %d", ESP.getFreeHeap());
+    ESP_LOGI(PRINTER_TAG, "Destructed, free heap %d", ESP.getFreeHeap());
   }
 
   size_t write (uint8_t x) {
-    ESP_LOGI(TAG, "WRITE 1");
+    ESP_LOGI(PRINTER_TAG, "WRITE 1");
 
     return write(&x, 1);
   }
@@ -84,22 +86,22 @@ public:
   }
 
   size_t _write(const uint8_t *buffer, size_t size) {
-    ESP_LOGI(TAG, "WRITE BUF %d", size);
+    ESP_LOGI(PRINTER_TAG, "WRITE BUF %d", size);
 
     if (out_transfer->data_buffer_size < size) {
-      ESP_LOGE(TAG, "USB transfer buffer size %d too small for response length %d",
+      ESP_LOGE(PRINTER_TAG, "USB transfer buffer size %d too small for response length %d",
                out_transfer->data_buffer_size, size);
       return 0;
     }
 
     if (xSemaphoreTake(transfer_mutex, (TickType_t) 1000) == pdTRUE) {
-      ESP_LOGI(TAG, "Acquired semaphore for transfer");
+      ESP_LOGI(PRINTER_TAG, "Acquired semaphore for transfer");
       out_transfer->num_bytes = size;
       memcpy(out_transfer->data_buffer, buffer, size);
-      ESP_LOGI(TAG, "Submit USB bulk transfer of size: %d", size);
+      ESP_LOGI(PRINTER_TAG, "Submit USB bulk transfer of size: %d", size);
       ESP_ERROR_CHECK(usb_host_transfer_submit(out_transfer));
     } else {
-      ESP_LOGE(TAG, "Failed to acquire semaphore to transfer");
+      ESP_LOGE(PRINTER_TAG, "Failed to acquire semaphore to transfer");
       return 0;
     }
     return size;

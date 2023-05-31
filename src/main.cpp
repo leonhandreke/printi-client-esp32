@@ -33,6 +33,8 @@
 #include <Preferences.h>
 #include <ArduinoOTA.h>
 
+#include <esp_tls.h>
+
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -42,8 +44,9 @@
 #include "string_helper.h"
 
 #include "Printer.hpp"
+#include "ota.hpp"
 
-#define TAG "main"
+static const char *TAG = "main";
 
 extern const uint8_t logo_h58_start[] asm("_binary_resources_logo_h58_start");
 extern const uint8_t logo_h58_end[] asm("_binary_resources_logo_h58_end");
@@ -51,11 +54,17 @@ extern const uint8_t logo_h58_end[] asm("_binary_resources_logo_h58_end");
 extern const uint8_t config_html_start[] asm("_binary_resources_config_html_start");
 extern const uint8_t config_html_end[] asm("_binary_resources_config_html_end");
 
+extern const uint8_t letsencrypt_pem_start[] asm("_binary_resources_letsencrypt_pem_start");
+extern const uint8_t letsencrypt_pem_end[] asm("_binary_resources_letsencrypt_pem_end");
+
 String PRINTI_API_SERVER_BASE_URL = "https://api.printi.me";
 
 const char* PREFERENCES_KEY_PRINTI_NAME = "printiName";
 const char* PREFERENCES_KEY_WIFI_SSID = "wifiSsid";
 const char* PREFERENCES_KEY_WIFI_PASSKEY = "wifiPasskey";
+// Used to print a success message the first time we connect to a WiFi network
+// Key is abbreviated because otherwise it will crash with TOO_LONG
+const char* PREFERENCES_KEY_WIFI_PREVIOUSLY_CONNECTED = "prevConnected";
 
 const char* CONFIG_MODE_AP_SSID = "printi";
 const char* CONFIG_MODE_AP_PASSKEY = "12345678";
@@ -78,6 +87,7 @@ Printer* printer = NULL;
 ESC_POS_Printer* esc_pos_printer = NULL;
 
 bool otaUpdateInProgress = false;
+bool configModeInProgress = false;
 
 
 void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_device_handle_t dev_hdl)
@@ -237,6 +247,9 @@ void startOtaUploadService() {
 
 void _configServerLoop(void *pvParameters) {
   ESP_LOGI(TAG, "Starting config server task");
+
+  bool printed_startup_message = false;
+
   while (true) {
     if (server == nullptr) {
       ESP_LOGI(TAG, "Server stopped, ending config server task");
@@ -245,6 +258,40 @@ void _configServerLoop(void *pvParameters) {
     }
     server->handleClient();
     vTaskDelay(50);
+
+    if (!printed_startup_message && printer != nullptr && esc_pos_printer != nullptr) {
+      ESP_LOGI(TAG, "Print config server startup message");
+
+      const char *image = (const char *) logo_h58_start;
+      size_t image_len = logo_h58_end - logo_h58_start;
+      printer->write((const uint8_t *) image, image_len);
+
+      esc_pos_printer->println("");
+      esc_pos_printer->println("=> Step 1:");
+      esc_pos_printer->println("On your phone/laptop, connect to");
+      esc_pos_printer->println("the WiFi network emitted by this");
+      esc_pos_printer->println("printi:");
+      esc_pos_printer->println("");
+      esc_pos_printer->println(String("      Name: ") + CONFIG_MODE_AP_SSID);
+      esc_pos_printer->println(String("  Password: ") + CONFIG_MODE_AP_PASSKEY);
+      esc_pos_printer->println("");
+      esc_pos_printer->println("=> Step 2:");
+      esc_pos_printer->println("Once connected, open a web");
+      esc_pos_printer->println("browser and navigate to:");
+      esc_pos_printer->println("   http://192.168.4.1/");
+      esc_pos_printer->println("");
+      esc_pos_printer->println("=> Step 3:");
+      esc_pos_printer->println("Give your printi a name and tell");
+      esc_pos_printer->println("it about the WiFi network you");
+      esc_pos_printer->println("want it to connect to");
+      esc_pos_printer->println("");
+      esc_pos_printer->println("That's it! Happy printing!");
+      esc_pos_printer->println("");
+      esc_pos_printer->println("");
+      esc_pos_printer->println("");
+
+      printed_startup_message = true;
+    }
   }
 }
 
@@ -253,6 +300,9 @@ void startConfigServer() {
   if (server != nullptr) {
     return;
   }
+
+  // Will kill the main thread
+  configModeInProgress = true;
 
   WiFi.mode(WIFI_MODE_AP);
   WiFi.softAP(CONFIG_MODE_AP_SSID, CONFIG_MODE_AP_PASSKEY);
@@ -288,6 +338,8 @@ void startConfigServer() {
     preferences.putString(PREFERENCES_KEY_WIFI_SSID, server->arg("ssid"));
     preferences.putString(PREFERENCES_KEY_WIFI_PASSKEY, server->arg("passkey"));
 
+    preferences.putBool(PREFERENCES_KEY_WIFI_PREVIOUSLY_CONNECTED, false);
+
     server->send(200, "text/plain", "Preferences saved, restarting...");
 //    server->sendHeader("Location", "/", true);
 //    server->send(303 /* See Other */, "text/html", "");
@@ -305,6 +357,7 @@ void startConfigServer() {
       10,               // Task priority
       NULL             // Task handle
   );
+
 }
 
 void stopConfigServer() {
@@ -367,6 +420,8 @@ void setup()
     hostname = hostname + "-" + getPrintiName().c_str();
   }
   WiFi.setHostname(hostname.c_str());
+  // Redo WiFi config every time, costs a bit of startup time but avoids locking to one BSSID
+  WiFi.persistent(false);
 
   String wifiSsid = preferences.getString(PREFERENCES_KEY_WIFI_SSID, "");
   String wifiPasskey = preferences.getString(PREFERENCES_KEY_WIFI_PASSKEY, "");
@@ -375,58 +430,40 @@ void setup()
     ESP_LOGI(TAG, "Stored WiFi SSID is empty, starting config server");
     startConfigServer();
   } else {
+    ESP_LOGI(TAG, "WiFi begin");
     WiFi.begin(wifiSsid.c_str(), wifiPasskey.c_str());
 
     for (int i = 5; i <= 5; i++) {
       if (WiFi.waitForConnectResult() == WL_CONNECTED) {
-        ESP_LOGI(TAG, "WiFi connected: %s", WiFi.localIP());
+        ESP_LOGI(TAG, "WiFi connected: %s BSSID %s", WiFi.localIP().toString().c_str(), WiFi.BSSIDstr().c_str());
         break;
       }
     }
   }
 
-  startOtaUploadService();
+  //startOtaUploadService();
 
   // TODO(Leon Handreke): Proper https
   wifiClient.setInsecure();
+  esp_tls_init_global_ca_store();
+  //const unsigned int letsencrypt_pem_len = ((char*) letsencrypt_pem_end) - ((char*) letsencrypt_pem_start);
+  ESP_ERROR_CHECK(
+      esp_tls_set_global_ca_store(letsencrypt_pem_start, letsencrypt_pem_end-letsencrypt_pem_start));
+  //ESP_ERROR_CHECK(esp_tls_set_global_ca_store((const unsigned char*) LETSENCRYPT_CA_CERT, strlen(LETSENCRYPT_CA_CERT) + 1));
+
+  checkForOTA("https://ndreke.de/~leon/dump/printi-firmware.bin", 5000, nullptr, true);
 }
 
 void printWifiConnectionInstructions() {
   ESP_LOGI(TAG, "Printing WiFi connection instructions");
 
   esc_pos_printer->println("This printi is not connected to the internet :(");
-//  esc_pos_printer->println("");
-//  esc_pos_printer->println("=> Step 1:");
-//  esc_pos_printer->println("On the little printi brain board");
-//  esc_pos_printer->println("found on the bottom of your");
-//  esc_pos_printer->println("printi, press the button labeled");
-//  esc_pos_printer->println("\"0\"");
-//  esc_pos_printer->println("");
-//  esc_pos_printer->println("=> Step 2:");
-//  esc_pos_printer->println("On your phone/laptop, connect to");
-//  esc_pos_printer->println("the WiFi network emitted by this");
-//  esc_pos_printer->println("printi:");
-//  esc_pos_printer->println("");
-//  esc_pos_printer->println(String("      Name: ") + CONFIG_MODE_AP_SSID);
-//  esc_pos_printer->println(String("  Password: ") + CONFIG_MODE_AP_PASSKEY);
-//  esc_pos_printer->println("");
-//  esc_pos_printer->println("=> Step 3:");
-//  esc_pos_printer->println("After connecting, open a web");
-//  esc_pos_printer->println("browser and navigate to:");
-//  esc_pos_printer->println("   http://192.168.4.1/");
-//  esc_pos_printer->println("");
-//  esc_pos_printer->println("=> Step 4:");
-//  esc_pos_printer->println("Type in the name and password of");
-//  esc_pos_printer->println("the WiFi network that you want");
-//  esc_pos_printer->println("your printi to connect to, and");
-//  esc_pos_printer->println("press Save.");
-//  esc_pos_printer->println("");
-//  esc_pos_printer->println("Tip: The settings page can also be used to change the name of your printer! Store these instructions somewhere safe (or visit help.printi.me).");
-//  esc_pos_printer->println("");
-//  esc_pos_printer->println("That's it! Happy printing!");
-//  esc_pos_printer->println("");
-//  esc_pos_printer->println("");
-//  esc_pos_printer->println("");
+  esc_pos_printer->println("");
+  esc_pos_printer->println("On the little printi brain board");
+  esc_pos_printer->println("found on the bottom of your");
+  esc_pos_printer->println("printi, press the button labeled");
+  esc_pos_printer->println("\"0\" to enter configuration mode.");
+  esc_pos_printer->println("");
 }
 
 void printPrintiServerErrorMessage() {
@@ -468,8 +505,8 @@ void set_printi_error_state(printi_error_state_t new_state) {
 bool printed_startup_image = false;
 
 void loop() {
-  if (otaUpdateInProgress) {
-    ESP_LOGI(TAG, "OTA Update in progress, main thread suicide");
+  if (otaUpdateInProgress || configModeInProgress) {
+    ESP_LOGI(TAG, "OTA Update or config mode in progress, main thread suicide");
     vTaskDelete(NULL);
     return;
   }
@@ -514,8 +551,8 @@ void loop() {
 
     set_printi_error_state(PRINTI_STATE_HEALTHY);
     printi_error_state_message_printed = true;
-
   }
+
 
   // Print welcome image
   if (!printed_startup_image) {
@@ -528,6 +565,17 @@ void loop() {
     printed_startup_image = true;
   }
 
+  // Print a connected message the first time we connect to a WiFi network
+  if (!preferences.getBool(PREFERENCES_KEY_WIFI_PREVIOUSLY_CONNECTED, false)) {
+    preferences.putBool(PREFERENCES_KEY_WIFI_PREVIOUSLY_CONNECTED, true);
+
+    esc_pos_printer->println("Connected lol! Go to: ");
+    esc_pos_printer->print("  printi.me/");
+    esc_pos_printer->println(getPrintiName());
+    esc_pos_printer->println("");
+    esc_pos_printer->println("");
+    esc_pos_printer->println("");
+  }
 
   String url = PRINTI_API_SERVER_BASE_URL + "/nextinqueue/" + getPrintiName();
   http.begin(wifiClient, url);
