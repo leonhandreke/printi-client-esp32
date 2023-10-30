@@ -387,7 +387,7 @@ void startButtonHandler() {
 
 void setup()
 {
-    esp_log_level_set("*", ESP_LOG_DEBUG);
+    esp_log_level_set("*", ESP_LOG_VERBOSE);
 
 //  delay(1000);
 //  pinMode(15, OUTPUT);

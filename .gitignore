@@ -1,2 +1,4 @@
 .pio
 cmake-*
+__pycache__
+.idea
