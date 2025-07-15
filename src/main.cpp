@@ -519,17 +519,18 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     set_printi_error_state(PRINTI_STATE_NO_WIFI);
     time_t error_state_duration = time(NULL) - printi_error_state_since;
-    if (!printi_error_state_message_printed && error_state_duration > (5*60)) {
+    if (!printi_error_state_message_printed && error_state_duration > (10*60)) {
       printWifiConnectionInstructions();
       printi_error_state_message_printed = true;
     }
+    WiFi.reconnect();
     return;
   }
 
   if (!canReach(PRINTI_API_SERVER_BASE_URL)) {
     set_printi_error_state(PRINTI_STATE_CANNOT_REACH_SERVER);
     time_t error_state_duration = time(NULL) - printi_error_state_since;
-    if (!printi_error_state_message_printed && error_state_duration > (5*60)) {
+    if (!printi_error_state_message_printed && error_state_duration > (10*60)) {
       printPrintiServerErrorMessage();
       printi_error_state_message_printed = true;
     }
