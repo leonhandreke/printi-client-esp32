@@ -71,7 +71,7 @@ public:
   }
 
   size_t write (uint8_t x) {
-    ESP_LOGI(PRINTER_TAG, "WRITE 1");
+    //ESP_LOGI(PRINTER_TAG, "WRITE 1");
 
     return write(&x, 1);
   }
@@ -86,8 +86,6 @@ public:
   }
 
   size_t _write(const uint8_t *buffer, size_t size) {
-    ESP_LOGI(PRINTER_TAG, "WRITE BUF %d", size);
-
     if (out_transfer->data_buffer_size < size) {
       ESP_LOGE(PRINTER_TAG, "USB transfer buffer size %d too small for response length %d",
                out_transfer->data_buffer_size, size);
@@ -95,10 +93,10 @@ public:
     }
 
     if (xSemaphoreTake(transfer_mutex, (TickType_t) 1000) == pdTRUE) {
-      ESP_LOGI(PRINTER_TAG, "Acquired semaphore for transfer");
+      ESP_LOGD(PRINTER_TAG, "Acquired semaphore for transfer");
       out_transfer->num_bytes = size;
       memcpy(out_transfer->data_buffer, buffer, size);
-      ESP_LOGI(PRINTER_TAG, "Submit USB bulk transfer of size: %d", size);
+      ESP_LOGD(PRINTER_TAG, "Submit USB bulk transfer of size: %d", size);
       ESP_ERROR_CHECK(usb_host_transfer_submit(out_transfer));
     } else {
       ESP_LOGE(PRINTER_TAG, "Failed to acquire semaphore to transfer");

@@ -68,7 +68,7 @@ void _client_event_callback(const usb_host_client_event_msg_t *event_msg, void *
       const usb_device_desc_t *dev_desc;
       err = usb_host_get_device_descriptor(driver_obj->dev_hdl, &dev_desc);
       if (err != ESP_OK) ESP_LOGI("", "usb_host_get_device_descriptor: %x", err);
-      //usb_print_device_descriptor(dev_desc);
+      usb_print_device_descriptor(dev_desc);
 
       const usb_config_desc_t *config_desc;
       err = usb_host_get_active_config_descriptor(driver_obj->dev_hdl, &config_desc);

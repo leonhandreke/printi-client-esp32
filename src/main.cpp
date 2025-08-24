@@ -59,22 +59,22 @@ extern const uint8_t letsencrypt_pem_end[] asm("_binary_resources_letsencrypt_pe
 
 String PRINTI_API_SERVER_BASE_URL = "https://api.printi.me";
 
-const char* PREFERENCES_KEY_PRINTI_NAME = "printiName";
-const char* PREFERENCES_KEY_WIFI_SSID = "wifiSsid";
-const char* PREFERENCES_KEY_WIFI_PASSKEY = "wifiPasskey";
+const char *PREFERENCES_KEY_PRINTI_NAME = "printiName";
+const char *PREFERENCES_KEY_WIFI_SSID = "wifiSsid";
+const char *PREFERENCES_KEY_WIFI_PASSKEY = "wifiPasskey";
 // Used to print a success message the first time we connect to a WiFi network
 // Key is abbreviated because otherwise it will crash with TOO_LONG
-const char* PREFERENCES_KEY_WIFI_PREVIOUSLY_CONNECTED = "prevConnected";
+const char *PREFERENCES_KEY_WIFI_PREVIOUSLY_CONNECTED = "prevConnected";
 
-const char* CONFIG_MODE_AP_SSID = "printi";
-const char* CONFIG_MODE_AP_PASSKEY = "12345678";
+const char *CONFIG_MODE_AP_SSID = "printi";
+const char *CONFIG_MODE_AP_PASSKEY = "12345678";
 
 Preferences preferences;
 
 WiFiClientSecure wifiClient;
 HTTPClient http;
 
-WebServer* server;
+WebServer *server;
 
 // TODO(Leon Handreke): USB handling is a fucking mess, there should not be three files that this is scattered over
 // Needs much better separation of concerns!
@@ -82,29 +82,35 @@ uint8_t bInterfaceNumber;
 uint8_t bInEndpointAddress;
 uint8_t bOutEndpointAddress;
 
-Printer* printer = NULL;
+Printer *printer = NULL;
 // ESC_POS_Printer is just a thin wrapper around Printer to implement some printer controll commands.
-ESC_POS_Printer* esc_pos_printer = NULL;
+ESC_POS_Printer *esc_pos_printer = NULL;
 
 bool otaUpdateInProgress = false;
 bool configModeInProgress = false;
 
+typedef enum {
+  ORIGINAL_PRINTI,
+  XIAMEN_BETTER_LITTLE_BLUE_CUTIE,
+} printer_type_t;
 
-void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_device_handle_t dev_hdl)
-{
+printer_type_t printer_type = ORIGINAL_PRINTI;
+
+
+void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_device_handle_t dev_hdl) {
   const usb_standard_desc_t *cur_desc;
   int cur_desc_offset;
 
   const usb_config_desc_t *config_desc;
   usb_host_get_active_config_descriptor(dev_hdl, &config_desc);
 
-  usb_intf_desc_t* printer_intf_desc = NULL;
+  usb_intf_desc_t *printer_intf_desc = NULL;
 
   cur_desc = (const usb_standard_desc_t *) config_desc;
   cur_desc_offset = 0;
   while (printer_intf_desc == NULL) {
     cur_desc = usb_parse_next_descriptor_of_type(
-        cur_desc, config_desc->wTotalLength, USB_B_DESCRIPTOR_TYPE_INTERFACE, &cur_desc_offset);
+      cur_desc, config_desc->wTotalLength, USB_B_DESCRIPTOR_TYPE_INTERFACE, &cur_desc_offset);
 
     if (cur_desc == NULL) {
       ESP_LOGI(TAG, "Interface Descriptor not found");
@@ -122,18 +128,17 @@ void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_devi
 
   ESP_LOGI(TAG, "Claiming interface: %x", printer_intf_desc->bInterfaceNumber);
   ESP_ERROR_CHECK(usb_host_interface_claim(client_hdl, dev_hdl,
-                                           printer_intf_desc->bInterfaceNumber,
-                                           printer_intf_desc->bAlternateSetting));
+    printer_intf_desc->bInterfaceNumber,
+    printer_intf_desc->bAlternateSetting));
 
 
   const usb_ep_desc_t *in_ep_desc;
   const usb_ep_desc_t *out_ep_desc;
   // Find the printer outgoing endpoint
   for (int i = 0; i < printer_intf_desc->bNumEndpoints; i++) {
-
     // Strangely, usb_parse_endpoint_descriptor_by_index insists on giving back the offset of the endpoint descriptor
     int temp_offset = cur_desc_offset;
-    const usb_ep_desc_t* ep_desc = usb_parse_endpoint_descriptor_by_index(printer_intf_desc,
+    const usb_ep_desc_t *ep_desc = usb_parse_endpoint_descriptor_by_index(printer_intf_desc,
                                                                           i,
                                                                           config_desc->wTotalLength,
                                                                           &temp_offset);
@@ -156,10 +161,16 @@ void usb_new_device_cb(const usb_host_client_handle_t client_hdl, const usb_devi
     printer = new Printer(dev_hdl, in_ep_desc, out_ep_desc);
     esc_pos_printer = new ESC_POS_Printer(printer);
   }
+
+  const usb_device_desc_t *dev_desc;
+  ESP_ERROR_CHECK(usb_host_get_device_descriptor(dev_hdl, &dev_desc));
+  if (dev_desc->idVendor == 0x28e9 && dev_desc->idProduct == 0x289) {
+    ESP_LOGI(TAG, "Detected XIAMEN_BETTER_LITTLE_BLUE_CUTIE printer");
+    printer_type = XIAMEN_BETTER_LITTLE_BLUE_CUTIE;
+  }
 }
 
-void usb_device_gone_cb(const usb_host_client_handle_t client_hdl, const usb_device_handle_t dev_hdl)
-{
+void usb_device_gone_cb(const usb_host_client_handle_t client_hdl, const usb_device_handle_t dev_hdl) {
   delete printer;
   printer = nullptr;
 
@@ -197,10 +208,10 @@ void _handleOtaUploadLoop(void *pvParameters) {
     vTaskDelay(500);
   }
 }
+
 void startOtaUploadService() {
   ArduinoOTA
       .onStart([]() {
-
         String type;
         if (ArduinoOTA.getCommand() == U_FLASH)
           type = "sketch";
@@ -224,11 +235,16 @@ void startOtaUploadService() {
       .onError([](ota_error_t error) {
         ESP_LOGE("OTA", "Error[%u]: ", error);
         otaUpdateInProgress = false;
-        if (error == OTA_AUTH_ERROR) ESP_LOGE("OTA", "Auth Failed");
-        else if (error == OTA_BEGIN_ERROR) ESP_LOGE("OTA", "Begin Failed");
-        else if (error == OTA_CONNECT_ERROR) ESP_LOGE("OTA", "Connect Failed");
-        else if (error == OTA_RECEIVE_ERROR) ESP_LOGE("OTA", "Receive Failed");
-        else if (error == OTA_END_ERROR) ESP_LOGE("OTA", "End Failed");
+        if (error == OTA_AUTH_ERROR)
+          ESP_LOGE("OTA", "Auth Failed");
+        else if (error == OTA_BEGIN_ERROR)
+          ESP_LOGE("OTA", "Begin Failed");
+        else if (error == OTA_CONNECT_ERROR)
+          ESP_LOGE("OTA", "Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR)
+          ESP_LOGE("OTA", "Receive Failed");
+        else if (error == OTA_END_ERROR)
+          ESP_LOGE("OTA", "End Failed");
       });
 
   ArduinoOTA.setHostname(WiFi.getHostname());
@@ -236,12 +252,12 @@ void startOtaUploadService() {
   ArduinoOTA.begin();
 
   xTaskCreate(
-      _handleOtaUploadLoop,    // Function that should be called
-      "Handle OTA Upload",  // Name of the task (for debugging)
-      10000,            // Stack size (bytes)
-      NULL,            // Parameter to pass
-      10,               // Task priority
-      NULL             // Task handle
+    _handleOtaUploadLoop, // Function that should be called
+    "Handle OTA Upload", // Name of the task (for debugging)
+    10000, // Stack size (bytes)
+    NULL, // Parameter to pass
+    10, // Task priority
+    NULL // Task handle
   );
 }
 
@@ -312,8 +328,8 @@ void startConfigServer() {
   server->on("/", HTTP_GET, []() -> void {
     ESP_LOGI(TAG, "on /");
 
-    size_t config_html_len = strlen((const char*) config_html_start) + 1;
-    char* config_html = (char *) malloc(sizeof(char) * config_html_len);
+    size_t config_html_len = strlen((const char *) config_html_start) + 1;
+    char *config_html = (char *) malloc(sizeof(char) * config_html_len);
     memcpy(config_html, config_html_start, config_html_len);
 
     strreplace(config_html,
@@ -329,7 +345,7 @@ void startConfigServer() {
                "{{PASSKEY}}",
                preferences.getString(PREFERENCES_KEY_WIFI_PASSKEY).c_str());
 
-    server->send(200, "text/html", (const char*) config_html);
+    server->send(200, "text/html", (const char *) config_html);
     free(config_html);
   });
   server->on("/", HTTP_POST, []() -> void {
@@ -341,8 +357,8 @@ void startConfigServer() {
     preferences.putBool(PREFERENCES_KEY_WIFI_PREVIOUSLY_CONNECTED, false);
 
     server->send(200, "text/plain", "Preferences saved, restarting...");
-//    server->sendHeader("Location", "/", true);
-//    server->send(303 /* See Other */, "text/html", "");
+    //    server->sendHeader("Location", "/", true);
+    //    server->send(303 /* See Other */, "text/html", "");
     ESP.restart();
   });
 
@@ -350,14 +366,13 @@ void startConfigServer() {
 
   ESP_LOGI(TAG, "Creating config server task");
   xTaskCreate(
-      _configServerLoop,    // Function that should be called
-      "Config server",  // Name of the task (for debugging)
-      10000,            // Stack size (bytes)
-      NULL,            // Parameter to pass
-      10,               // Task priority
-      NULL             // Task handle
+    _configServerLoop, // Function that should be called
+    "Config server", // Name of the task (for debugging)
+    10000, // Stack size (bytes)
+    NULL, // Parameter to pass
+    10, // Task priority
+    NULL // Task handle
   );
-
 }
 
 void stopConfigServer() {
@@ -366,7 +381,7 @@ void stopConfigServer() {
 }
 
 void _handleButtonLoop(void *pvParameters) {
-  while(true) {
+  while (true) {
     if (digitalRead(0) == LOW) {
       ESP_LOGI(TAG, "Button pressed, starting config server");
       startConfigServer();
@@ -374,25 +389,26 @@ void _handleButtonLoop(void *pvParameters) {
     vTaskDelay(500);
   }
 }
+
 void startButtonHandler() {
   xTaskCreate(
-      _handleButtonLoop,    // Function that should be called
-      "Handle Button",  // Name of the task (for debugging)
-      5000,            // Stack size (bytes)
-      NULL,            // Parameter to pass
-      10,               // Task priority
-      NULL             // Task handle
+    _handleButtonLoop, // Function that should be called
+    "Handle Button", // Name of the task (for debugging)
+    5000, // Stack size (bytes)
+    NULL, // Parameter to pass
+    10, // Task priority
+    NULL // Task handle
   );
 }
 
-void setup()
-{
-    esp_log_level_set("*", ESP_LOG_VERBOSE);
+void setup() {
+  esp_log_level_set("*", ESP_LOG_VERBOSE);
 
-//  delay(1000);
-//  pinMode(15, OUTPUT);
-//  delay(500);
-  Serial.begin(115200, SERIAL_8N1, 33, 34);
+  // Use the line below on ESP32-S2 where the default serial port isn't wired up to a USB-Serial
+  //Serial.begin(115200, SERIAL_8N1, 33, 34);
+  // This is enough for the ESP32-S3 DevKit
+  Serial.begin(115200);
+
   Serial.setDebugOutput(true);
   Serial.println("Gumo powerup");
 
@@ -401,11 +417,11 @@ void setup()
   startButtonHandler();
 
   TaskHandle_t usb_host_driver_task_hdl;
-  void* params[] = {(void *)usb_new_device_cb, (void*)usb_device_gone_cb};
+  void *params[] = {(void *) usb_new_device_cb, (void *) usb_device_gone_cb};
   xTaskCreate(usbh_task,
               "usb_host_driver",
               4096,
-              (void*) params,
+              (void *) params,
               0,
               &usb_host_driver_task_hdl);
 
@@ -435,7 +451,8 @@ void setup()
 
     for (int i = 5; i <= 5; i++) {
       if (WiFi.waitForConnectResult() == WL_CONNECTED) {
-        ESP_LOGI(TAG, "WiFi connected: %s BSSID %s", WiFi.localIP().toString().c_str(), WiFi.BSSIDstr().c_str());
+        ESP_LOGI(TAG, "WiFi connected: %s BSSID %s", WiFi.localIP().toString().c_str(),
+                 WiFi.BSSIDstr().c_str());
         break;
       }
     }
@@ -448,7 +465,7 @@ void setup()
   esp_tls_init_global_ca_store();
   //const unsigned int letsencrypt_pem_len = ((char*) letsencrypt_pem_end) - ((char*) letsencrypt_pem_start);
   ESP_ERROR_CHECK(
-      esp_tls_set_global_ca_store(letsencrypt_pem_start, letsencrypt_pem_end-letsencrypt_pem_start));
+    esp_tls_set_global_ca_store(letsencrypt_pem_start, letsencrypt_pem_end-letsencrypt_pem_start));
   //ESP_ERROR_CHECK(esp_tls_set_global_ca_store((const unsigned char*) LETSENCRYPT_CA_CERT, strlen(LETSENCRYPT_CA_CERT) + 1));
 
   checkForOTA("https://ndreke.de/~leon/dump/printi-firmware.bin", 5000, nullptr, true);
@@ -519,7 +536,7 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     set_printi_error_state(PRINTI_STATE_NO_WIFI);
     time_t error_state_duration = time(NULL) - printi_error_state_since;
-    if (!printi_error_state_message_printed && error_state_duration > (10*60)) {
+    if (!printi_error_state_message_printed && error_state_duration > (10 * 60)) {
       printWifiConnectionInstructions();
       printi_error_state_message_printed = true;
     }
@@ -530,7 +547,7 @@ void loop() {
   if (!canReach(PRINTI_API_SERVER_BASE_URL)) {
     set_printi_error_state(PRINTI_STATE_CANNOT_REACH_SERVER);
     time_t error_state_duration = time(NULL) - printi_error_state_since;
-    if (!printi_error_state_message_printed && error_state_duration > (10*60)) {
+    if (!printi_error_state_message_printed && error_state_duration > (10 * 60)) {
       printPrintiServerErrorMessage();
       printi_error_state_message_printed = true;
     }
@@ -598,6 +615,9 @@ void loop() {
     esc_pos_printer->println("");
     esc_pos_printer->println("");
     esc_pos_printer->println("");
+    if (printer_type == XIAMEN_BETTER_LITTLE_BLUE_CUTIE) {
+      esc_pos_printer->println("");
+    }
   } else {
     ESP_LOGI(TAG, "HTTP response code: %x", response_code);
   }
