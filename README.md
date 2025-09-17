@@ -1,10 +1,12 @@
 ## Run
 
+You'll need to [install the PlatformIO CLI](https://docs.platformio.org/en/latest/core/installation/methods/index.html). Usually, that's just a `brew install platformio`.
+
 To flash using USB:
 
-	pio run --target upload -e lolin_s2_mini-usb
+	pio run --target upload -e esp32s3-usb # Optionally: --upload_port /dev/ttyACM0 or whatever it is on your system
 
-Because we need the USB port to talk to the printer, the ESP32-S2 needs to be put into bootloader mode for flashing by holding the BOOT button while pressing RESET. For more information, see https://docs.espressif.com/projects/esp-idf/en/latest/esp32s2/api-guides/dfu.html.
+<!-- Because we need the USB port to talk to the printer, the ESP32-S2 needs to be put into bootloader mode for flashing by holding the BOOT button while pressing RESET. For more information, see https://docs.espressif.com/projects/esp-idf/en/latest/esp32s2/api-guides/dfu.html. -->
 
 
 
