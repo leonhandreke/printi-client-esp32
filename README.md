@@ -2,9 +2,11 @@
 
 You'll need to [install the PlatformIO CLI](https://docs.platformio.org/en/latest/core/installation/methods/index.html). Usually, that's just a `brew install platformio`.
 
-To flash using USB:
+To flash using USB, plug it into the COM port on your ESP32-S3 DevKit and run:
 
-	pio run --target upload -e esp32s3-usb # Optionally: --upload_port /dev/ttyACM0 or whatever it is on your system
+	pio run --target upload -e esp32s3-usb
+
+If it fails, maybe the USB-to-Serial device shows up in a different place on your system. Use `--upload_port /dev/ttyACM0` or whatever it is on your system to make it work.
 
 <!-- Because we need the USB port to talk to the printer, the ESP32-S2 needs to be put into bootloader mode for flashing by holding the BOOT button while pressing RESET. For more information, see https://docs.espressif.com/projects/esp-idf/en/latest/esp32s2/api-guides/dfu.html. -->
 
