@@ -226,7 +226,7 @@
 		const url = "/ping";
 		// const url = "/logo.svg";
 		setInterval(() => {
-			fetch(url).then(response => response.text()).then(data => {
+			fetch(url).then(response => response.text()).catch(r => "").then(data => {
 				const connected = data.trim() === "pong";
 				
 				console.log(connected);

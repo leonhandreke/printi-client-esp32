@@ -334,9 +334,10 @@ void startConfigServer() {
   server->on("/", HTTP_GET, []() -> void {
     ESP_LOGI(TAG, "on /");
 
-    size_t config_html_len = strlen((const char *) config_html_start) + 1;
-    char *config_html = (char *) malloc(sizeof(char) * config_html_len);
+    size_t config_html_len = config_html_end - config_html_start;
+    char *config_html = (char *) malloc(sizeof(char) * (config_html_len + 1));
     memcpy(config_html, config_html_start, config_html_len);
+    config_html[config_html_len] = '\0';
 
     strreplace(config_html,
                "{{PRINTI_NAME}}",
@@ -362,7 +363,7 @@ void startConfigServer() {
 
     preferences.putBool(PREFERENCES_KEY_WIFI_PREVIOUSLY_CONNECTED, false);
 
-    server->send(200, "text/plain", "✅ Preferences saved, restarting...");
+    server->send(200, "text/plain; charset=utf-8", "✅ Preferences saved, restarting...");
     //    server->sendHeader("Location", "/", true);
     //    server->send(303 /* See Other */, "text/html", "");
     ESP.restart();
