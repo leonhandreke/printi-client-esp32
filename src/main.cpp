@@ -57,6 +57,12 @@ extern const uint8_t config_html_end[] asm("_binary_resources_config_html_end");
 extern const uint8_t letsencrypt_pem_start[] asm("_binary_resources_letsencrypt_pem_start");
 extern const uint8_t letsencrypt_pem_end[] asm("_binary_resources_letsencrypt_pem_end");
 
+extern const uint8_t logo_svg_start[] asm("_binary_resources_logo_svg_start");
+extern const uint8_t logo_svg_end[] asm("_binary_resources_logo_svg_end");
+
+extern const uint8_t courgette_ttf_start[] asm("_binary_resources_courgette_ttf_start");
+extern const uint8_t courgette_ttf_end[] asm("_binary_resources_courgette_ttf_end");
+
 String PRINTI_API_SERVER_BASE_URL = "https://api.printi.me";
 
 const char *PREFERENCES_KEY_PRINTI_NAME = "printiName";
@@ -356,11 +362,25 @@ void startConfigServer() {
 
     preferences.putBool(PREFERENCES_KEY_WIFI_PREVIOUSLY_CONNECTED, false);
 
-    server->send(200, "text/plain", "Preferences saved, restarting...");
+    server->send(200, "text/plain", "✅ Preferences saved, restarting...");
     //    server->sendHeader("Location", "/", true);
     //    server->send(303 /* See Other */, "text/html", "");
     ESP.restart();
   });
+  
+  // Add a ping
+  server->on("/ping", HTTP_GET, []() -> void {
+    server->send(200, "text/plain", "pong");
+  });
+  
+  server->on("/logo.svg", HTTP_GET, []() -> void {
+    server->send_P(200, PSTR("image/svg+xml"), (const char *) logo_svg_start, logo_svg_end - logo_svg_start);
+  });
+  server->on("/courgette.ttf", HTTP_GET, []() -> void {
+    server->send_P(200, PSTR("font/ttf"), (const char *) courgette_ttf_start, courgette_ttf_end - courgette_ttf_start);
+  });
+  
+    
 
   server->begin();
 

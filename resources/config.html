@@ -1,15 +1,13 @@
 ﻿<!DOCTYPE html>
-
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
 <head>
-	<script>console.log("printi, by Fons van der Plas (http://github.com/fons-) 🌈");</script>
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, user-scalable=no">
 	<title>printi</title>
 	<style>
 		@font-face {
 			font-family: 'Courgette';
-			src: url('/Content/fonts/Courgette-Regular.ttf') format('truetype');
+			src: url('./courgette.ttf') format('truetype');
 		}
 		body {
 			background-color: #efe6b8;
@@ -43,6 +41,11 @@
 			padding-top: 20px;
 			overflow: hidden;
 			font-family: monospace;
+		}
+		
+		form {
+			display: flex;
+    		flex-direction: column;
 		}
 
 		#receipt {
@@ -153,6 +156,20 @@
 				transform: rotate(0deg);
 			}
 		}
+		
+		#not-connected-warning {
+			max-width: 250px;
+			margin: 2em auto;
+			text-align: center;
+			padding: 20px;
+			background-color: #f7f3de;
+			border-top: 1em solid red;
+			border-radius: 10px;
+			
+			font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+			
+			
+		}
 	</style>
 </head>
 <body>
@@ -160,11 +177,16 @@
 		<div style="margin: 0 auto; width: 250px; height: 80px; padding-top: 30px; padding-bottom: 20px; align-content: center; text-align: center;">
 			<div style="position: relative; ">
 
-				<div style="position: absolute; width: 100%;"><h1><img src="/Content/printi_logo_transparent.svg" width="100" height="34" alt="printi" title="printi" /></h1></div>
+				<div style="position: absolute; width: 100%;"><h1><img src="./logo.svg" width="100" height="34" alt="printi" title="printi" /></h1></div>
 				<div style="position: absolute; left: 180px; bottom: -76px;" id="printername"><h1>/{{PRINTI_NAME_TITLE}}</h1></div>
 			</div>
 		</div>
 	</div>
+	
+	<div id="not-connected-warning" style="display: none;">
+		<p>🚨 <strong>Lost connection.</strong> Reconnect to the printi WiFi hotspot and come back to this page.</p>
+	</div>
+	
 	<div style="margin: 0 auto; width: 250px; align-content: center; text-align: center;">
 
 
@@ -194,5 +216,27 @@
 			</div>
 		</div>
 	</div>
+	
+	
+	<script type="module">
+		
+		const notConnectedWarning = document.getElementById("not-connected-warning");
+		const submitButton = document.querySelector("form input[type='submit']");
+		
+		const url = "/ping";
+		// const url = "/logo.svg";
+		setInterval(() => {
+			fetch(url).then(response => response.text()).then(data => {
+				const connected = data.trim() === "pong";
+				
+				console.log(connected);
+				notConnectedWarning.style.display = connected ? "none" : "block";
+				submitButton.disabled = !connected;
+			});
+		}, 1000);
+		
+	</script>
+		
+	
 </body>
 </html>
