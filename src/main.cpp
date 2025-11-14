@@ -424,7 +424,7 @@ void startButtonHandler() {
 }
 
 void _resetQuickRebootsCounter(void *pvParameters) {
-  sleep(10);
+  sleep(15);
   preferences.putUInt(PREFERENCES_KEY_QUICK_REBOOT_COUNTER, 0);
   ESP_LOGI(TAG, "Wrote reboot counter 0");
   // We're done here, end this task
