@@ -65,6 +65,7 @@ extern const uint8_t courgette_ttf_end[] asm("_binary_resources_courgette_ttf_en
 
 String PRINTI_API_SERVER_BASE_URL = "https://api.printi.me";
 
+const char *PREFERENCES_KEY_QUICK_REBOOT_COUNTER = "rebootCounter";
 const char *PREFERENCES_KEY_PRINTI_NAME = "printiName";
 const char *PREFERENCES_KEY_WIFI_SSID = "wifiSsid";
 const char *PREFERENCES_KEY_WIFI_PASSKEY = "wifiPasskey";
@@ -415,11 +416,43 @@ void startButtonHandler() {
   xTaskCreate(
     _handleButtonLoop, // Function that should be called
     "Handle Button", // Name of the task (for debugging)
-    5000, // Stack size (bytes)
+    2000, // Stack size (bytes)
     NULL, // Parameter to pass
     10, // Task priority
     NULL // Task handle
   );
+}
+
+void _resetQuickRebootsCounter(void *pvParameters) {
+  sleep(10);
+  preferences.putUInt(PREFERENCES_KEY_QUICK_REBOOT_COUNTER, 0);
+  ESP_LOGI(TAG, "Wrote reboot counter 0");
+  // We're done here, end this task
+  vTaskDelete(NULL);
+}
+
+bool startConfigServerAfterQuickReboots() {
+  ESP_LOGI(TAG, "Checking reboot counter");
+  auto quickRebootCounter = preferences.getUInt(PREFERENCES_KEY_QUICK_REBOOT_COUNTER, 0);
+  ESP_LOGI(TAG, "Reboot counter is %d", quickRebootCounter);
+  if (quickRebootCounter >= 3) {
+    ESP_LOGI(TAG, "reset counter and start config server %d", quickRebootCounter);
+    preferences.putUInt(PREFERENCES_KEY_QUICK_REBOOT_COUNTER, 0);
+    startConfigServer();
+    return true;
+  }
+  preferences.putUInt(PREFERENCES_KEY_QUICK_REBOOT_COUNTER, quickRebootCounter + 1);
+  ESP_LOGI(TAG, "Incremented reboot counter by 1");
+
+  xTaskCreate(
+    _resetQuickRebootsCounter,
+    "Reset the quick reboots counter",
+    2000,
+    NULL,
+    10,
+    NULL
+  );
+  return false;
 }
 
 void setup() {
@@ -435,8 +468,7 @@ void setup() {
 
   preferences.begin("printi");
 
-  startButtonHandler();
-
+  // Start the USB host driver before the config server because that needs to print things
   TaskHandle_t usb_host_driver_task_hdl;
   void *params[] = {(void *) usb_new_device_cb, (void *) usb_device_gone_cb};
   xTaskCreate(usbh_task,
@@ -446,7 +478,15 @@ void setup() {
               0,
               &usb_host_driver_task_hdl);
 
-  WiFi.mode(WIFI_STA);
+  // Config mode can also be triggered by the button on the board
+  startButtonHandler();
+  if (startConfigServerAfterQuickReboots()) {
+    // If the config server was started, we don't want to continue setting up the WiFi
+    // it will be set to AP mode by the config server
+    configModeInProgress = true;
+    return;
+  }
+
   WiFi.setSleep(WIFI_PS_NONE);
   // Set hostname so that they're easier to identify in the dashboard
   // Apparently required to get setHostname to work due to a bug
@@ -457,9 +497,11 @@ void setup() {
     hostname = hostname + "-" + getPrintiName().c_str();
   }
   WiFi.setHostname(hostname.c_str());
+
+
+  WiFi.mode(WIFI_STA);
   // Redo WiFi config every time, costs a bit of startup time but avoids locking to one BSSID
   WiFi.persistent(false);
-
   String wifiSsid = preferences.getString(PREFERENCES_KEY_WIFI_SSID, "");
   String wifiPasskey = preferences.getString(PREFERENCES_KEY_WIFI_PASSKEY, "");
 
@@ -478,7 +520,6 @@ void setup() {
       }
     }
   }
-
   //startOtaUploadService();
 
   // TODO(Leon Handreke): Proper https
@@ -489,7 +530,14 @@ void setup() {
     esp_tls_set_global_ca_store(letsencrypt_pem_start, letsencrypt_pem_end-letsencrypt_pem_start));
   //ESP_ERROR_CHECK(esp_tls_set_global_ca_store((const unsigned char*) LETSENCRYPT_CA_CERT, strlen(LETSENCRYPT_CA_CERT) + 1));
 
-  checkForOTA("https://ndreke.de/~leon/dump/printi-firmware.bin", 5000, nullptr, true);
+  // Important: this fucking magic does not do SNI, whatever that means. So virtual host selection
+  // in Apache is broken. The default host needs to accept a "Host: ndreke.de" header. The way to do that is to
+  // make that VirtualHost be first. Otherwise, we get a 421 in the logs
+  checkForOTA(
+    "https://ndreke.de/~leon/dump/printi-firmware-esp32s3.bin",
+    5000,
+    (const char*) letsencrypt_pem_start,
+    true);
 }
 
 void printWifiConnectionInstructions() {
